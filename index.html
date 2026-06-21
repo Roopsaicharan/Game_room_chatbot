@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Game Room | Reitz Union - University of Florida</title>
+    <meta name="description" content="Reitz Union Game Room at the University of Florida">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <!-- Utility Bar -->
+    <div class="utility-bar">
+        <div class="utility-container">
+            <a href="#">STAFF DIRECTORY</a>
+            <a href="#">STUDENT EMPLOYMENT</a>
+            <a href="#" class="utility-hours">HOURS</a>
+        </div>
+    </div>
+
+    <!-- Navigation -->
+    <header class="main-header">
+        <div class="header-container">
+            <a href="#" class="header-logo-link">
+                <div class="uf-logo-box">UF</div>
+                <div class="header-titles">
+                    <span class="title-primary">REITZ UNION</span>
+                    <span class="title-secondary">DIVISION OF STUDENT LIFE</span>
+                </div>
+            </a>
+            <nav class="main-nav">
+                <a href="#">THINGS TO DO</a>
+                <a href="#">EVENT SERVICES</a>
+                <a href="#">REITZ UNION HOTEL</a>
+                <a href="#">VISIT</a>
+                <a href="#">ABOUT</a>
+                <a href="#">CONTACT</a>
+            </nav>
+            <button class="mobile-menu-btn" id="mobileMenuBtn" aria-label="Toggle menu">
+                <span></span><span></span><span></span>
+            </button>
+        </div>
+    </header>
+
+    <!-- Hero Section -->
+    <section class="hero" id="hero">
+        <img src="hero_bg.png" alt="Billiards Player" class="hero-bg-img">
+        <div class="hero-overlay"></div>
+        <div class="hero-content">
+            <h1 class="hero-title">GAME ROOM</h1>
+        </div>
+    </section>
+
+    <!-- Content Area -->
+    <main class="main-content">
+        <!-- About Section -->
+        <section class="content-section text-center">
+            <h2 class="section-title">ABOUT</h2>
+            <p class="section-desc">The Reitz Union Game Room is your on-campus recreation facility, located on the Ground Level of the Reitz Union.</p>
+        </section>
+
+        <!-- Offerings Section (matching screenshot layout roughly) -->
+        <section class="content-section offerings-section">
+            <div class="offerings-image">
+                <img src="hero_bg.png" alt="Bowling Alley">
+            </div>
+            <div class="offerings-list">
+                <h2 class="section-title left-align">OFFERINGS</h2>
+                <ul>
+                    <li>14 Bowling Lanes</li>
+                    <li>2 Foosball Tables</li>
+                    <li>9 Billiards Tables</li>
+                    <li>Snooker Table</li>
+                    <li>Air Hockey</li>
+                    <li>Table Tennis</li>
+                    <li>Esports Gaming</li>
+                    <li>Board Games</li>
+                </ul>
+            </div>
+        </section>
+
+        <!-- Employee Quick Links / Chatbot triggers -->
+        <section class="content-section bg-light" id="staff-resources">
+            <div class="container text-center">
+                <h2 class="section-title">STAFF RESOURCES</h2>
+                <p class="section-desc">Access employee guidelines, POS tutorials, and emergency procedures using the Gator Assistant.</p>
+                <div class="staff-actions">
+                    <button class="btn btn-uf-orange" id="heroChatBtn">
+                        Open Gator Assistant
+                    </button>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-brand">
+                    <p>Reitz Union Game Room Assistant</p>
+                    <p class="footer-sub">University of Florida · Gainesville, FL</p>
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    <!-- Chat Widget -->
+    <div class="chat-widget" id="chatWidget">
+        <button class="chat-fab" id="chatFab" aria-label="Open chat assistant">
+            <div class="fab-icon open-icon">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                </svg>
+            </div>
+            <div class="fab-icon close-icon">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+            </div>
+        </button>
+
+        <div class="chat-panel" id="chatPanel">
+            <div class="chat-header">
+                <div class="chat-header-info">
+                    <img src="gator_avatar.png" alt="Gator" class="chat-avatar">
+                    <div>
+                        <h4>Gator Game Room Assistant</h4>
+                        <span class="chat-status">Online · Navigator LLM</span>
+                    </div>
+                </div>
+                <button class="chat-close" id="chatClose" aria-label="Close chat">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="chat-messages" id="chatMessages">
+                <!-- Messages will be inserted here -->
+            </div>
+            <form class="chat-input-area" id="chatForm">
+                <input type="text" class="chat-input" id="chatInput" placeholder="Ask about Game Room policies..." autocomplete="off">
+                <button type="submit" class="chat-send" id="chatSend" aria-label="Send message">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                    </svg>
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="manual_data.js"></script>
+    <script src="chatbot.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,4 @@
+node_modules/
+.env
+vector_store.json
+.DS_Store
