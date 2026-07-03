@@ -45,10 +45,23 @@ function setAdminPassword(newPassword) {
     writeAuth(data);
 }
 
+// Returns which roles are still on the seeded "0000" default, so the server can surface a
+// loud startup warning until they're rotated (they must be changed before any real use).
+function rolesUsingDefaultPassword() {
+    if (!fs.existsSync(env.AUTH_PATH)) return [];
+    const data = readAuth();
+    const roles = [];
+    if (data.staffPasswordHash && bcrypt.compareSync(DEFAULT_PASSWORD, data.staffPasswordHash)) roles.push('staff');
+    if (data.adminPasswordHash && bcrypt.compareSync(DEFAULT_PASSWORD, data.adminPasswordHash)) roles.push('admin');
+    if (data.supervisorPasswordHash && bcrypt.compareSync(DEFAULT_PASSWORD, data.supervisorPasswordHash)) roles.push('supervisor');
+    return roles;
+}
+
 module.exports = {
     seedIfMissing,
     verifyStaffPassword,
     verifyAdminPassword,
     setStaffPassword,
     setAdminPassword,
+    rolesUsingDefaultPassword,
 };

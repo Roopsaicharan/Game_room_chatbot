@@ -71,4 +71,8 @@ app.listen(env.PORT, () => {
     if (!env.hasManual()) {
         console.warn(`No manual found at ${env.MANUAL_PATH}. Manual-based Q&A will be disabled until it's added.`);
     }
+    const defaultRoles = authStore.rolesUsingDefaultPassword();
+    if (defaultRoles.length > 0) {
+        console.warn(`SECURITY: ${defaultRoles.join(' and ')} still using the default "0000" password — rotate immediately via the admin panel before real use.`);
+    }
 });

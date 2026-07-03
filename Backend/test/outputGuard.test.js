@@ -16,10 +16,27 @@ test('blocks and fully replaces a response leaking a labeled password', () => {
     assert.equal(text.includes('hunter2'), false);
 });
 
-test('blocks on credit-card-shaped digit runs, not just partial redaction', () => {
+test('blocks on a Luhn-valid credit-card number, not just partial redaction', () => {
+    // 4111111111111111 is the canonical Visa test number and passes the Luhn check.
     const { text, blocked } = outputGuard.guard('Your card 4111111111111111 is on file.');
     assert.equal(blocked, true);
     assert.equal(text, outputGuard.RESTRICTED_MESSAGE);
+});
+
+test('does NOT block a long digit run that fails the Luhn check (e.g. an order/reference id)', () => {
+    // 1234567890123456 is 16 digits but not Luhn-valid — a reference id, not a card number.
+    const input = 'Your reservation reference 1234567890123456 is confirmed.';
+    const { text, blocked } = outputGuard.guard(input);
+    assert.equal(blocked, false);
+    assert.equal(text, input);
+});
+
+test('redacts a labeled account/terminal number inline instead of blocking the whole reply', () => {
+    const { text, blocked, redacted } = outputGuard.guard('The front desk terminal number 998877 is by register two.');
+    assert.equal(blocked, false);
+    assert.equal(redacted, true);
+    assert.equal(text.includes('998877'), false);
+    assert.ok(text.includes('by register two'), 'the non-sensitive remainder of the answer should survive');
 });
 
 test('blocks on SSN-shaped strings', () => {

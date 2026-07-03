@@ -1,4 +1,6 @@
 const express = require('express');
+const rateLimit = require('express-rate-limit');
+const { ipKeyGenerator } = require('express-rate-limit');
 const env = require('../config/env');
 const navigator = require('../lib/navigatorClient');
 const { buildSystemPrompt, CANNED_RESPONSES } = require('../lib/personaPrompt');
@@ -8,6 +10,21 @@ const { searchManual } = require('../services/searchManual');
 const outputGuard = require('../services/outputGuard');
 
 const router = express.Router();
+
+// Every chat message can trigger up to three Navigator API calls (classify+rewrite, embed,
+// complete), so an unthrottled /api/chat is both a cost risk and a DoS surface. Throttle per
+// client. Uses the session id when present (a logged-in staff/admin shares one), else the IP.
+const chatLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: parseInt(process.env.CHAT_RATE_LIMIT_PER_MIN, 10) || 20,
+    standardHeaders: true,
+    legacyHeaders: false,
+    // Prefer the session id (a logged-in staff/admin shares one) so a single user is one
+    // bucket; fall back to the IP via the library's ipKeyGenerator, which normalizes IPv6
+    // into a /64 subnet key so v6 clients can't trivially rotate addresses to bypass limits.
+    keyGenerator: (req) => req.sessionID || ipKeyGenerator(req.ip),
+    message: { response: "You're sending messages a little too fast — give me a moment and try again!" },
+});
 
 const NOT_CONFIGURED_MESSAGE = "I'm not fully configured yet — the site owner needs to set up the Navigator API key. Please check back soon!";
 const MAX_MESSAGE_LENGTH = 1500;
@@ -84,7 +101,7 @@ async function buildToolContext(intent, message, role) {
     return { block: '', citation: null };
 }
 
-router.post('/', async (req, res) => {
+router.post('/', chatLimiter, async (req, res) => {
     if (!env.hasApiKey()) {
         return res.status(503).json({ response: NOT_CONFIGURED_MESSAGE });
     }
