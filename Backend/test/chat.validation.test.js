@@ -53,9 +53,11 @@ test('accepts a message at the 1500-char limit and completes the full pipeline (
     let callCount = 0;
     // routes/chat.js and services/router.js both hold the same cached module reference, so
     // patching this export stubs both the classification call and the generation call.
+    // First call is the combined classify+rewrite router call (returns JSON); second is the
+    // answer generation.
     navigator.chatComplete = async () => {
         callCount += 1;
-        return callCount === 1 ? 'casual' : 'Hi there!';
+        return callCount === 1 ? '{"intent":"casual","standalone_query":"hello"}' : 'Hi there!';
     };
     try {
         const app = freshChatApp();
@@ -63,7 +65,7 @@ test('accepts a message at the 1500-char limit and completes the full pipeline (
         const res = await request(app).post('/api/chat').send({ message });
         assert.equal(res.status, 200);
         assert.equal(res.body.response, 'Hi there!');
-        assert.equal(callCount, 2); // one classify call, one generation call
+        assert.equal(callCount, 2); // one router call, one generation call
     } finally {
         navigator.chatComplete = originalChatComplete;
     }
@@ -75,7 +77,8 @@ test('unsupported intent short-circuits to a canned refusal with NO generation c
     let callCount = 0;
     navigator.chatComplete = async () => {
         callCount += 1;
-        if (callCount === 1) return 'unsupported'; // the one legitimate classification call
+        // The one legitimate router call; its JSON classifies the message as unsupported.
+        if (callCount === 1) return '{"intent":"unsupported","standalone_query":"write a python program"}';
         throw new Error('generation must never be called when intent is unsupported');
     };
     try {

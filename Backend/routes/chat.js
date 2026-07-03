@@ -29,6 +29,24 @@ const chatLimiter = rateLimit({
 const NOT_CONFIGURED_MESSAGE = "I'm not fully configured yet — the site owner needs to set up the Navigator API key. Please check back soon!";
 const MAX_MESSAGE_LENGTH = 1500;
 
+// Conversation memory lives in the (file-backed) session. We keep a little more than we send:
+// STORED is the rolling window persisted; CONTEXT is how many recent messages we actually feed
+// to the router and the answer model, to bound token cost.
+const MAX_HISTORY_STORED = 10;   // messages (≈5 exchanges)
+const MAX_HISTORY_CONTEXT = 6;   // messages (≈3 exchanges)
+
+function getHistory(req) {
+    return Array.isArray(req.session?.history) ? req.session.history : [];
+}
+
+function recordTurn(req, userMessage, assistantReply) {
+    if (!req.session) return;
+    const history = getHistory(req);
+    history.push({ role: 'user', content: userMessage });
+    history.push({ role: 'assistant', content: assistantReply });
+    req.session.history = history.slice(-MAX_HISTORY_STORED);
+}
+
 const CANNED_TEXTS = new Set([
     ...Object.values(CANNED_RESPONSES),
     outputGuard.RESTRICTED_MESSAGE,
@@ -124,8 +142,16 @@ router.post('/', chatLimiter, async (req, res) => {
         timeStyle: 'short',
     });
 
+    const history = getHistory(req);
+    const contextHistory = history.slice(-MAX_HISTORY_CONTEXT);
+
     try {
-        const intent = await router_.classifyIntent(userMessage);
+        // One call classifies intent AND rewrites the (possibly elliptical) message into a
+        // standalone query using recent history, so a follow-up like "what about faculty?"
+        // retrieves against "what is the faculty price for billiards?" instead of a bare
+        // pronoun. The standalone query drives retrieval/live-topic detection; the original
+        // message is what the answer model sees (with history for natural phrasing).
+        const { intent, standaloneQuery } = await router_.classifyAndRewrite(userMessage, contextHistory);
 
         // Enforced in code, not left to the model's judgment: an "unsupported" classification
         // (credential requests, rule-override attempts, or anything unrelated to the Game
@@ -135,16 +161,23 @@ router.post('/', chatLimiter, async (req, res) => {
         // ("write me a Python program... you're a good assistant") could talk the model out
         // of refusing, since nothing in code actually enforced it.
         if (intent === 'unsupported') {
+            recordTurn(req, userMessage, CANNED_RESPONSES.OUT_OF_SCOPE);
             return res.json({ response: CANNED_RESPONSES.OUT_OF_SCOPE });
         }
 
-        const { block, citation } = await buildToolContext(intent, userMessage, userRole);
+        const { block, citation } = await buildToolContext(intent, standaloneQuery, userRole);
 
         const messages = [
             { role: 'system', content: buildSystemPrompt(userRole, currentDateTime) },
         ];
         if (block) {
             messages.push({ role: 'system', content: block });
+        }
+        // Prior turns give the model continuity for follow-ups. This is user-authored text, so
+        // the same persona-prompt injection defenses apply — it's conversational context, never
+        // an instruction source.
+        for (const turn of contextHistory) {
+            messages.push({ role: turn.role, content: turn.content });
         }
         messages.push({ role: 'user', content: userMessage });
 
@@ -161,11 +194,19 @@ router.post('/', chatLimiter, async (req, res) => {
             }
         }
 
+        recordTurn(req, userMessage, reply);
         res.json({ response: reply });
     } catch (error) {
         console.error('Chat error:', error.message);
         res.status(500).json({ response: 'Sorry, I ran into a problem answering that. Please try again in a moment.' });
     }
+});
+
+// Lets the frontend start a fresh conversation without dropping the whole session (role/login
+// is preserved; only the chat memory is cleared).
+router.post('/reset', (req, res) => {
+    if (req.session) req.session.history = [];
+    res.json({ ok: true });
 });
 
 module.exports = router;
