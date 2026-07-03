@@ -74,6 +74,30 @@ test('defensively re-checks access_level in code even if a disallowed chunk some
     });
 });
 
+test('splits a compound question into separate sub-queries so one topic cannot dilute another\'s embedding (regression: "what about tv streams? also, can i play without bowling shoes" failed to surface the bowling-shoes rule because the combined message was embedded as a single vector)', async () => {
+    await withStubs(EMPTY_RESULT, async (getArgs) => {
+        await searchManual('what about tv streams? also, can i play without bowling shoes', 'public');
+        assert.equal(getArgs().queryEmbeddings.length, 2, 'expected one embedding per sub-question');
+    });
+});
+
+test('merges and dedupes passages across sub-queries, keeping the best score for a chunk that matches more than one', async () => {
+    const fakeResult = {
+        // two sub-queries: first finds chunk A strongly and chunk B weakly, second finds chunk A weakly (duplicate) and chunk C strongly
+        documents: [['chunk A text', 'chunk B text'], ['chunk A text', 'chunk C text']],
+        metadatas: [
+            [{ section: 'A', access_level: 'public' }, { section: 'B', access_level: 'public' }],
+            [{ section: 'A', access_level: 'public' }, { section: 'C', access_level: 'public' }],
+        ],
+        distances: [[0.2, 1.2], [1.0, 0.1]],
+    };
+    await withStubs(fakeResult, async () => {
+        const { passages } = await searchManual('first question? also, second question', 'public');
+        const sections = passages.map((p) => p.section);
+        assert.deepEqual(sections, ['C', 'A', 'B'], 'expected sections sorted by best score, chunk A deduped to its higher-scoring hit');
+    });
+});
+
 test('reports usedFallback when nothing passes the relevance threshold', async () => {
     const fakeResult = {
         documents: [['barely related text']],

@@ -35,12 +35,31 @@ async function buildToolContext(intent, message, role) {
     if (intent === 'live') {
         const topic = liveInfo.detectTopic(message);
         const result = await liveInfo.fetchLiveInfo(topic);
-        if (!result.content) {
-            return { block: 'LIVE_INFO: (none — the live page could not be reached)', citation: null };
+        if (result.content) {
+            const citation = { type: 'live', sourceUrl: result.sourceUrl, lastChecked: result.lastChecked };
+            const block = `LIVE_INFO (from ${result.sourceUrl}, fetched ${result.lastChecked}):\n${result.content}${result.closureNoted ? '\n[Note: the word "closed" appears on this page — check whether a reason is given before stating one.]' : ''}`;
+            return { block, citation };
         }
-        const citation = { type: 'live', sourceUrl: result.sourceUrl, lastChecked: result.lastChecked };
-        const block = `LIVE_INFO (from ${result.sourceUrl}, fetched ${result.lastChecked}):\n${result.content}${result.closureNoted ? '\n[Note: the word "closed" appears on this page — check whether a reason is given before stating one.]' : ''}`;
-        return { block, citation };
+
+        // The live page couldn't be reached (down, blocked, or redesigned — see the tripwire
+        // in liveInfo.js). Rather than dead-ending, fall back to the manual's own general info
+        // (hours, specials, reservation policies) — it's a secondary source, so it's labeled
+        // as such and the model is told to hedge accordingly (a manual value can be stale in a
+        // way a successful live fetch isn't).
+        if (env.hasManual()) {
+            try {
+                const { passages } = await searchManual(message, role);
+                if (passages.length > 0) {
+                    const block = `LIVE_INFO: (none — the live page could not be reached)\nFALLBACK_MANUAL_CONTEXT (from the reference manual, not live-verified — may be outdated):\n${passages.map((p) => `[Section: ${p.section}]\n${p.text}`).join('\n\n')}`;
+                    const sections = [...new Set(passages.map((p) => p.section))];
+                    return { block, citation: { type: 'manual', sections } };
+                }
+            } catch (error) {
+                console.error('Manual fallback search error:', error.message);
+            }
+        }
+
+        return { block: 'LIVE_INFO: (none — the live page could not be reached, and no matching manual passage was found either)', citation: null };
     }
 
     if (intent === 'manual') {

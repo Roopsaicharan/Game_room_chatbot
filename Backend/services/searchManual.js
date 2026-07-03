@@ -21,36 +21,61 @@ function whereForRole(role) {
     return levels.length === 1 ? { access_level: levels[0] } : { access_level: { $in: levels } };
 }
 
+// A single user message routinely bundles more than one question ("what about tv streams?
+// also, can i play without bowling shoes"). Embedding the whole message as one vector blends
+// both topics together, which can push a chunk that would otherwise clear
+// RELEVANCE_THRESHOLD comfortably (e.g. the bowling-shoes rule, a real public chunk) down
+// below it — not because it's irrelevant, but because the query vector itself is diluted.
+// Splitting on strong separators and embedding each part separately avoids that dilution.
+function splitSubQueries(message) {
+    const parts = message
+        .split(/[?？]+|\n+|(?:,?\s+(?:also|additionally|and also)\s*[,:]?\s*)/i)
+        .map((part) => part.trim())
+        .filter((part) => part.length > 2);
+    return parts.length > 1 ? parts : [message];
+}
+
 // Role is re-enforced here regardless of what the `where` filter already did — the prompt
 // (and even the DB filter) is not the security boundary; this function is.
 async function searchManual(query, role) {
     const collection = await chromaClient.getOrCreateCollection();
-    const queryEmbedding = await navigator.embed(query);
+    const subQueries = splitSubQueries(query);
+    const queryEmbeddings = await Promise.all(subQueries.map((q) => navigator.embed(q)));
 
     const result = await collection.query({
-        queryEmbeddings: [queryEmbedding],
+        queryEmbeddings,
         nResults: N_RESULTS,
         where: whereForRole(role),
     });
 
-    const documents = result.documents?.[0] || [];
-    const metadatas = result.metadatas?.[0] || [];
-    const distances = result.distances?.[0] || [];
     const allowedLevels = allowedLevelsForRole(role);
+    const bestByText = new Map();
 
-    const passages = [];
-    for (let i = 0; i < documents.length; i++) {
-        const metadata = metadatas[i] || {};
-        if (!allowedLevels.includes(metadata.access_level)) continue; // defensive re-check
+    const numQueries = result.documents?.length || 0;
+    for (let q = 0; q < numQueries; q++) {
+        const documents = result.documents[q] || [];
+        const metadatas = result.metadatas?.[q] || [];
+        const distances = result.distances?.[q] || [];
 
-        const distance = distances[i] ?? 2;
-        const similarity = 1 - distance / 2; // cosine distance in Chroma ranges 0 (identical)..2 (opposite)
-        if (similarity < env.RELEVANCE_THRESHOLD) continue;
+        for (let i = 0; i < documents.length; i++) {
+            const metadata = metadatas[i] || {};
+            if (!allowedLevels.includes(metadata.access_level)) continue; // defensive re-check
 
-        passages.push({ section: metadata.section || 'Manual', text: documents[i], score: similarity });
+            const distance = distances[i] ?? 2;
+            const similarity = 1 - distance / 2; // cosine distance in Chroma ranges 0 (identical)..2 (opposite)
+            if (similarity < env.RELEVANCE_THRESHOLD) continue;
+
+            // The same chunk can surface for more than one sub-query — keep its best score.
+            const existing = bestByText.get(documents[i]);
+            if (!existing || similarity > existing.score) {
+                bestByText.set(documents[i], { section: metadata.section || 'Manual', text: documents[i], score: similarity });
+            }
+        }
     }
+
+    const passages = [...bestByText.values()].sort((a, b) => b.score - a.score).slice(0, N_RESULTS);
 
     return { passages, usedFallback: passages.length === 0 };
 }
 
-module.exports = { searchManual };
+module.exports = { searchManual, splitSubQueries };
