@@ -30,6 +30,24 @@ const chatLimiter = rateLimit({
 const NOT_CONFIGURED_MESSAGE = "I'm not fully configured yet — the site owner needs to set up the Navigator API key. Please check back soon!";
 const MAX_MESSAGE_LENGTH = 1500;
 
+// The router (an LLM) is imperfect and, even at temperature 0, occasionally dumps a legitimate
+// question into "unsupported" and would hard-refuse it. So we CONFIRM IN CODE before refusing:
+// only a message that actually looks like a credential grab or an off-topic / rule-override /
+// code-generation attempt is hard-refused. Everything else the router flagged unsupported falls
+// through to a grounded attempt (the persona prompt still refuses genuine off-topic itself).
+const SECRET_TERMS = /\b(password|passcode|passwd|pw|credential|api\s*key|access\s*code|door\s*code|alarm\s*code|admin\s*login)\b/i;
+const OFFTOPIC_ATTACK = /\b(python|javascript|typescript|java|c\+\+|golang|rust|sql|code|coding|program|programming|script|algorithm|essay|poem|story|homework|recipe|joke|translate)\b|ignore (the|your|all|previous)|disregard (the|your|all|previous)|pretend (you|to be|that)|act as|you are now|roleplay|jailbreak|developer mode|system prompt|tell me everything|dump (the|everything|all)|entire manual|whole manual/i;
+// The venue's own answerable public info — used to route a rescued question to the live path
+// (which blends the manual) since contact/hours/pricing facts often live on the page.
+const PUBLIC_INFO = /\b(phone|contact|address|e-?mail|hours?|pricing|price|cost|rate|fee|location|located|directions|reservation|bowling|billiards?|pool table|foosball|snooker|esports|air hockey|ping.?pong|table tennis|board game|lane|offering)\b/i;
+
+function resolveIntent(routerIntent, message) {
+    if (routerIntent !== 'unsupported') return routerIntent;
+    if (SECRET_TERMS.test(message) || OFFTOPIC_ATTACK.test(message)) return 'unsupported'; // genuinely bad → refuse
+    if (PUBLIC_INFO.test(message)) return 'live'; // contact/hours/offerings often live on the page (blends manual)
+    return 'manual'; // otherwise attempt a grounded answer; the model refuses if truly off-topic
+}
+
 // Conversation memory lives in the (file-backed) session. We keep a little more than we send:
 // STORED is the rolling window persisted; CONTEXT is how many recent messages we actually feed
 // to the router and the answer model, to bound token cost.
@@ -117,7 +135,10 @@ function closureAlertText(content) {
 // today", "free") benefits from the live page too. Gate the manual→live enrichment on these
 // terms so pure policy questions (uniforms, refund steps) don't get the hours/pricing page
 // dumped into their context as noise.
-const LIVE_RELEVANT = /\b(hour|open|clos|price|cost|rate|fee|today|tonight|right now|free|when|schedul|availab|holiday)/i;
+// Contact terms are included because the public phone/email live ONLY on the live page (the
+// sanitizer strips them from the manual), so a manual-classified contact question still needs
+// the live page blended in to answer.
+const LIVE_RELEVANT = /\b(hour|open|clos|price|cost|rate|fee|today|tonight|right now|free|when|schedul|availab|holiday|phone|contact|e-?mail|number|reach|call)/i;
 
 async function buildToolContext(intent, message, role) {
     if (intent === 'live') {
@@ -165,21 +186,29 @@ async function buildToolContext(intent, message, role) {
             console.error('Manual search error:', error.message);
             return { block: 'RETRIEVED_CONTEXT: (none — the manual knowledge base could not be reached)', citations: [] };
         }
-        if (passages.length === 0) {
-            return { block: 'RETRIEVED_CONTEXT: (none — no matching passages found)', citations: [] };
-        }
-        let block = `RETRIEVED_CONTEXT:\n${formatPassages(passages)}`;
-        const citations = [manualCitation(passages)];
 
-        // Combine in current data when it's both relevant AND already cached (no extra fetch),
-        // so a policy question that also touches hours/pricing gets a precise, current answer.
+        let block = passages.length > 0 ? `RETRIEVED_CONTEXT:\n${formatPassages(passages)}` : '';
+        const citations = passages.length > 0 ? [manualCitation(passages)] : [];
+
+        // Combine in current data when the question touches a volatile/contact topic. Some facts
+        // (the public phone/email) live ONLY on the live page — the sanitizer redacts them from
+        // the manual — so this runs EVEN WHEN manual retrieval found nothing. When we already
+        // have manual passages, use the warm cache (zero extra fetch); when the manual came up
+        // empty, actively fetch so a contact/hours question still gets an answer.
         if (LIVE_RELEVANT.test(message)) {
-            const cachedLive = liveInfo.getCachedLiveInfo(liveInfo.detectTopic(message));
-            if (cachedLive && cachedLive.content) {
-                block += `\n\nSUPPLEMENTARY_LIVE_INFO (current data from ${cachedLive.sourceUrl}, fetched ${cachedLive.lastChecked} — authoritative for hours/pricing/closures; ignore anything here unrelated to the question):\n${cachedLive.content}`;
-                block += closureAlertText(cachedLive.content);
-                citations.push(liveCitation(cachedLive));
+            const topic = liveInfo.detectTopic(message);
+            const live = passages.length > 0
+                ? liveInfo.getCachedLiveInfo(topic)
+                : await liveInfo.fetchLiveInfo(topic).catch(() => null);
+            if (live && live.content) {
+                block += `${block ? '\n\n' : ''}SUPPLEMENTARY_LIVE_INFO (current data from ${live.sourceUrl}, fetched ${live.lastChecked} — authoritative for hours/pricing/contact/closures; ignore anything here unrelated to the question):\n${live.content}`;
+                block += closureAlertText(live.content);
+                citations.push(liveCitation(live));
             }
+        }
+
+        if (!block) {
+            return { block: 'RETRIEVED_CONTEXT: (none — no matching passages found)', citations: [] };
         }
         return { block, citations };
     }
@@ -221,6 +250,12 @@ router.post('/', chatLimiter, async (req, res) => {
         // message is what the answer model sees (with history for natural phrasing).
         const { intent, standaloneQuery } = await router_.classifyAndRewrite(userMessage, contextHistory);
 
+        // Confirm-in-code before hard-refusing a router "unsupported" (see resolveIntent): the
+        // classifier occasionally mislabels legit questions (a staff "time punch error" query, a
+        // phone-number ask), and a wrong refusal is a bad experience. Genuine credential/attack
+        // requests still refuse; everything else gets a grounded attempt.
+        const effectiveIntent = resolveIntent(intent, userMessage);
+
         // Enforced in code, not left to the model's judgment: an "unsupported" classification
         // (credential requests, rule-override attempts, or anything unrelated to the Game
         // Room) short-circuits straight to a canned refusal with NO generation call at all.
@@ -228,13 +263,13 @@ router.post('/', chatLimiter, async (req, res) => {
         // the persona prompt alone to refuse — testing showed a flattering off-topic request
         // ("write me a Python program... you're a good assistant") could talk the model out
         // of refusing, since nothing in code actually enforced it.
-        if (intent === 'unsupported') {
+        if (effectiveIntent === 'unsupported') {
             recordTurn(req, userMessage, CANNED_RESPONSES.OUT_OF_SCOPE);
             analyticsStore.logQuestion({ role: userRole, intent, question: userMessage, answered: false, citationType: null });
             return res.json({ response: CANNED_RESPONSES.OUT_OF_SCOPE });
         }
 
-        const { block, citations } = await buildToolContext(intent, standaloneQuery, userRole);
+        const { block, citations } = await buildToolContext(effectiveIntent, standaloneQuery, userRole);
 
         const messages = [
             { role: 'system', content: buildSystemPrompt(userRole, currentDateTime) },
@@ -270,7 +305,7 @@ router.post('/', chatLimiter, async (req, res) => {
         // which questions the current knowledge base can't yet handle.
         analyticsStore.logQuestion({
             role: userRole,
-            intent,
+            intent: effectiveIntent,
             question: userMessage,
             answered: !isCannedResponse(reply),
             citationType: sources[0] ? sources[0].type : null,
