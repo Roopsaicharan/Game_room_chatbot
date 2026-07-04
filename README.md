@@ -32,6 +32,7 @@ project-root/
 ├── frontend/                    static site + chat UI, served by Express as static files
 │   ├── index.html                landing page (Customer / Staff / Admin entry links)
 │   ├── staff.html, admin.html    password-gated entry pages
+│   ├── admin-content.html         admin: edit manual, re-ingest, view question/feedback logs
 │   ├── app.js                     chat widget logic + safe markdown rendering
 │   └── styles.css
 ├── Backend/                     Node/Express app — everything server-side
@@ -39,20 +40,25 @@ project-root/
 │   ├── config/env.js              central env reading (API key present?, manual present?, ports, thresholds)
 │   ├── lib/navigatorClient.js     openai SDK wrapper — chat + embeddings against Navigator
 │   ├── lib/personaPrompt.js       the assistant's system prompt + canned refusal strings
-│   ├── services/router.js         intent classification (manual | live | casual | unsupported)
-│   ├── services/liveInfo.js       allowlisted page fetch + cache + text extraction
-│   ├── services/chromaClient.js   Chroma collection access (no embedding function)
+│   ├── services/router.js         combined intent classification + follow-up query rewrite
+│   ├── services/liveInfo.js       allowlisted page fetch + disk-durable cache + text extraction
+│   ├── services/chromaClient.js   Chroma collection access (+ getAllRecords for the BM25 corpus)
+│   ├── services/keywordIndex.js   in-process BM25 index, fused with vector search
 │   ├── services/sanitizer.js      ingestion-time credential/PII redaction
-│   ├── services/searchManual.js   role-filtered semantic search over the manual
-│   ├── services/outputGuard.js    final regex safety net on every chat response
-│   ├── services/authStore.js      bcrypt-hashed staff/admin password storage
-│   ├── routes/chat.js             orchestrates router → tool → prompt → guard → response
-│   ├── routes/auth.js             staff/admin login, logout, password rotation, session
-│   ├── middleware/requireTier.js  role-based route protection
-│   ├── scripts/ingest.js          (re)builds the Chroma collection from the sanitized manual
+│   ├── services/searchManual.js   role-filtered HYBRID (vector + BM25) search over the manual
+│   ├── services/outputGuard.js    tiered regex safety net on every chat response
+│   ├── services/analyticsStore.js append-only question + feedback logs
+│   ├── services/authStore.js      bcrypt-hashed staff/supervisor/admin password storage
+│   ├── routes/chat.js             orchestrates router → tool → prompt → guard → response; memory; feedback
+│   ├── routes/auth.js             staff/supervisor/admin login, logout, password rotation, session
+│   ├── routes/admin.js            admin-gated: manual read/edit, re-ingest, logs (requireTier)
+│   ├── middleware/requireTier.js  role-based route protection (public<staff<supervisor<admin)
+│   ├── scripts/ingest.js          (re)builds the Chroma collection; exports ingestManual()
+│   ├── scripts/eval.js            50-question eval runner (npm run eval, vs a live server)
+│   ├── eval/questions.js          the 50 graded eval questions
 │   ├── package.json / package-lock.json
 │   ├── .env                       git-ignored — never committed
-│   └── private/                   git-ignored: manual_clean.txt, auth.json — never committed
+│   └── private/                   git-ignored: manual_clean.txt, auth.json, sessions/, *_cache/*.jsonl
 ├── chroma_data/                 ChromaDB's own data directory (separate server, git-ignored)
 ├── .venv-chroma/                 local Python venv for running the Chroma server (git-ignored)
 └── docs/                        architecture diagram + project report
