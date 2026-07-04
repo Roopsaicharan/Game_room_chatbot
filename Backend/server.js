@@ -7,6 +7,7 @@ const env = require('./config/env');
 const authStore = require('./services/authStore');
 const chatRoutes = require('./routes/chat');
 const authRoutes = require('./routes/auth');
+const adminRoutes = require('./routes/admin');
 
 const app = express();
 
@@ -43,6 +44,7 @@ app.use(express.static(FRONTEND_DIR));
 
 app.use('/api/chat', chatRoutes);
 app.use('/api/auth', authRoutes);
+app.use('/api/admin', adminRoutes);
 
 // Centralized error handler: never leak stack traces / file paths to the client.
 // Catches body-parser errors (malformed JSON, oversized payloads) and anything else

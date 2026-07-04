@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Game Room Assistant — Content Admin</title>
+    <style>
+        :root { --uf-blue: #0021A5; --uf-orange: #FA4616; --bg: #f4f5f7; --card: #fff; --line: #e2e5ea; --muted: #5b6472; }
+        * { box-sizing: border-box; }
+        body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: var(--bg); color: #1a1f29; }
+        header { background: var(--uf-blue); color: #fff; padding: 14px 22px; display: flex; align-items: center; gap: 10px; }
+        header h1 { font-size: 1.05rem; margin: 0; font-weight: 600; }
+        header .tag { margin-left: auto; font-size: .8rem; opacity: .85; }
+        main { max-width: 960px; margin: 22px auto; padding: 0 16px; }
+        .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 18px; margin-bottom: 18px; }
+        .card h2 { margin: 0 0 12px; font-size: 1rem; }
+        button { background: var(--uf-blue); color: #fff; border: 0; border-radius: 7px; padding: 9px 16px; font-size: .9rem; cursor: pointer; }
+        button.secondary { background: #eef0f4; color: #1a1f29; }
+        button.orange { background: var(--uf-orange); }
+        button:disabled { opacity: .5; cursor: not-allowed; }
+        input[type=password] { padding: 9px 11px; border: 1px solid var(--line); border-radius: 7px; font-size: .9rem; width: 220px; }
+        textarea { width: 100%; min-height: 360px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .82rem; line-height: 1.5; border: 1px solid var(--line); border-radius: 8px; padding: 12px; resize: vertical; }
+        .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+        .status { font-size: .85rem; color: var(--muted); margin-left: 4px; }
+        .status.ok { color: #1a7f37; } .status.err { color: #c0392b; }
+        .hidden { display: none; }
+        .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+        .stat { background: #f7f9fc; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+        .stat .n { font-size: 1.4rem; font-weight: 700; color: var(--uf-blue); }
+        .stat .l { font-size: .75rem; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+        ul.qlist { list-style: none; padding: 0; margin: 0; max-height: 260px; overflow: auto; }
+        ul.qlist li { padding: 7px 0; border-bottom: 1px solid var(--line); font-size: .85rem; }
+        ul.qlist li .meta { color: var(--muted); font-size: .72rem; }
+        .note { font-size: .8rem; color: var(--muted); margin-top: 8px; }
+    </style>
+</head>
+<body>
+    <header>
+        <span>🐊</span>
+        <h1>Game Room Assistant — Content Admin</h1>
+        <span class="tag" id="sessionTag"></span>
+    </header>
+    <main>
+        <div class="card" id="loginCard">
+            <h2>Admin sign in</h2>
+            <div class="row">
+                <input type="password" id="adminPassword" placeholder="Admin password" autocomplete="current-password">
+                <button id="loginBtn">Sign in</button>
+                <span class="status" id="loginStatus"></span>
+            </div>
+            <p class="note">Access to manual editing, re-ingestion, and question logs requires the admin password.</p>
+        </div>
+
+        <div id="adminUI" class="hidden">
+            <div class="card">
+                <h2>Usage overview</h2>
+                <div class="stat-grid" id="statGrid"></div>
+                <p class="note" id="intentBreakdown"></p>
+            </div>
+
+            <div class="card">
+                <h2>Manual content</h2>
+                <p class="note">Edit the source manual. Tag a section's access with a line containing only <code>[PUBLIC]</code>, <code>[STAFF]</code>, or <code>[SUPERVISOR]</code> right under its heading. Saving does not change what the bot retrieves until you re-ingest.</p>
+                <textarea id="manualText" spellcheck="false" placeholder="Loading…"></textarea>
+                <div class="row" style="margin-top: 12px;">
+                    <button id="saveBtn">Save manual</button>
+                    <button id="reingestBtn" class="orange">Save &amp; re-ingest</button>
+                    <button id="reloadBtn" class="secondary">Reload from server</button>
+                    <span class="status" id="manualStatus"></span>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Unanswered questions <span class="note">(what the bot couldn't answer — fill these gaps in the manual)</span></h2>
+                <ul class="qlist" id="unansweredList"></ul>
+            </div>
+
+            <div class="card">
+                <h2>Recent questions</h2>
+                <ul class="qlist" id="recentList"></ul>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        const $ = (id) => document.getElementById(id);
+        function setStatus(el, msg, kind) { el.textContent = msg; el.className = 'status' + (kind ? ' ' + kind : ''); }
+
+        async function api(path, opts) {
+            const res = await fetch(path, Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts));
+            let data = {};
+            try { data = await res.json(); } catch (_) {}
+            return { ok: res.ok, status: res.status, data };
+        }
+
+        async function checkSession() {
+            const { data } = await api('/api/auth/session');
+            if (data.tier === 'admin') { showAdmin(); return true; }
+            $('sessionTag').textContent = data.tier && data.tier !== 'public' ? `Signed in as ${data.tier} (need admin)` : '';
+            return false;
+        }
+
+        function showAdmin() {
+            $('loginCard').classList.add('hidden');
+            $('adminUI').classList.remove('hidden');
+            $('sessionTag').textContent = 'Signed in as admin';
+            loadManual();
+            loadLogs();
+        }
+
+        $('loginBtn').addEventListener('click', async () => {
+            setStatus($('loginStatus'), 'Signing in…');
+            const { ok, data } = await api('/api/auth/admin-login', { method: 'POST', body: JSON.stringify({ password: $('adminPassword').value }) });
+            if (ok) { $('adminPassword').value = ''; showAdmin(); }
+            else setStatus($('loginStatus'), data.error || 'Sign in failed', 'err');
+        });
+
+        async function loadManual() {
+            const { ok, data } = await api('/api/admin/manual');
+            if (ok) { $('manualText').value = data.text || ''; setStatus($('manualStatus'), data.exists ? `Loaded (${data.bytes} bytes)` : 'No manual file yet', 'ok'); }
+            else setStatus($('manualStatus'), data.error || 'Could not load', 'err');
+        }
+
+        async function saveManual() {
+            setStatus($('manualStatus'), 'Saving…');
+            const { ok, data } = await api('/api/admin/manual', { method: 'PUT', body: JSON.stringify({ text: $('manualText').value }) });
+            if (ok) setStatus($('manualStatus'), `Saved (${data.bytes} bytes). Re-ingest to apply.`, 'ok');
+            else setStatus($('manualStatus'), data.error || 'Save failed', 'err');
+            return ok;
+        }
+
+        async function reingest() {
+            $('reingestBtn').disabled = true;
+            setStatus($('manualStatus'), 'Re-ingesting (embedding chunks, ~10-20s)…');
+            const { ok, data } = await api('/api/admin/reingest', { method: 'POST' });
+            if (ok) {
+                const b = data.byLevel || {};
+                const parts = Object.keys(b).map((k) => `${b[k]} ${k}`).join(', ');
+                setStatus($('manualStatus'), `Re-ingested ${data.chunks} chunks (${parts}).`, 'ok');
+                loadLogs();
+            } else setStatus($('manualStatus'), data.error || 'Re-ingest failed', 'err');
+            $('reingestBtn').disabled = false;
+        }
+
+        $('saveBtn').addEventListener('click', saveManual);
+        $('reloadBtn').addEventListener('click', loadManual);
+        $('reingestBtn').addEventListener('click', async () => { if (await saveManual()) reingest(); });
+
+        async function loadLogs() {
+            const { ok, data } = await api('/api/admin/logs?limit=100');
+            if (!ok) return;
+            const s = data.summary || {};
+            $('statGrid').innerHTML = [
+                ['Total questions', s.totalQuestions ?? 0],
+                ['Unanswered', s.unanswered ?? 0],
+                ['Answered rate', s.answeredRate != null ? Math.round(s.answeredRate * 100) + '%' : '—'],
+                ['👍 / 👎', `${(s.feedback && s.feedback.up) || 0} / ${(s.feedback && s.feedback.down) || 0}`],
+            ].map(([l, n]) => `<div class="stat"><div class="n">${n}</div><div class="l">${l}</div></div>`).join('');
+            $('intentBreakdown').textContent = s.byIntent ? 'By intent: ' + Object.entries(s.byIntent).map(([k, v]) => `${k} ${v}`).join(' · ') : '';
+            renderList('unansweredList', data.unanswered);
+            renderList('recentList', data.recent);
+        }
+
+        function renderList(id, items) {
+            const el = $(id);
+            if (!items || !items.length) { el.innerHTML = '<li class="meta">Nothing yet.</li>'; return; }
+            el.innerHTML = items.map((q) => {
+                const when = q.at ? new Date(q.at).toLocaleString() : '';
+                const esc = (q.question || '').replace(/</g, '&lt;');
+                return `<li>${esc}<div class="meta">${q.role || 'public'} · ${q.intent || '—'} · ${q.answered ? 'answered' : 'unanswered'} · ${when}</div></li>`;
+            }).join('');
+        }
+
+        checkSession();
+    </script>
+</body>
+</html>

@@ -38,6 +38,18 @@ router.post('/staff-login', loginLimiter, async (req, res) => {
     res.json({ tier: 'staff' });
 });
 
+router.post('/supervisor-login', loginLimiter, async (req, res) => {
+    const password = String((req.body || {}).password || '');
+    if (!password) {
+        return res.status(400).json({ error: 'Password is required' });
+    }
+    if (!authStore.verifySupervisorPassword(password)) {
+        return res.status(401).json({ error: 'Incorrect password' });
+    }
+    await regenerateSession(req, 'supervisor');
+    res.json({ tier: 'supervisor' });
+});
+
 router.post('/admin-login', loginLimiter, async (req, res) => {
     const password = String((req.body || {}).password || '');
     if (!password) {
@@ -78,6 +90,16 @@ router.post('/change-staff-password', requireTier('admin'), (req, res) => {
         return res.status(400).json({ error: validationError });
     }
     authStore.setStaffPassword(newPassword);
+    res.json({ ok: true });
+});
+
+router.post('/change-supervisor-password', requireTier('admin'), (req, res) => {
+    const newPassword = (req.body || {}).newPassword;
+    const validationError = validateNewPassword(newPassword);
+    if (validationError) {
+        return res.status(400).json({ error: validationError });
+    }
+    authStore.setSupervisorPassword(newPassword);
     res.json({ ok: true });
 });
 

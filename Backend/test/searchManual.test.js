@@ -48,6 +48,27 @@ test('staff role queries for both public and staff-tagged chunks', async () => {
     });
 });
 
+test('supervisor role queries public+staff+supervisor tiers (but not admin)', async () => {
+    await withStubs(EMPTY_RESULT, async (getArgs) => {
+        await searchManual('any question', 'supervisor');
+        assert.deepEqual(getArgs().where, { access_level: { $in: ['public', 'staff', 'supervisor'] } });
+    });
+});
+
+test('admin role queries every tier', async () => {
+    await withStubs(EMPTY_RESULT, async (getArgs) => {
+        await searchManual('any question', 'admin');
+        assert.deepEqual(getArgs().where, { access_level: { $in: ['public', 'staff', 'supervisor', 'admin'] } });
+    });
+});
+
+test('an unknown role falls back to public-only (fail closed)', async () => {
+    await withStubs(EMPTY_RESULT, async (getArgs) => {
+        await searchManual('any question', 'intruder');
+        assert.deepEqual(getArgs().where, { access_level: 'public' });
+    });
+});
+
 test('filters out passages below the relevance threshold', async () => {
     const fakeResult = {
         documents: [['relevant text', 'irrelevant text']],

@@ -35,7 +35,7 @@ function isHeadingLine(line) {
 }
 
 function parseAccessMarker(line) {
-    const match = line.trim().match(/^\[(PUBLIC|STAFF)\]$/i);
+    const match = line.trim().match(/^\[(PUBLIC|STAFF|SUPERVISOR)\]$/i);
     return match ? match[1].toLowerCase() : null;
 }
 
@@ -141,22 +141,24 @@ function slugify(title) {
     return title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'section';
 }
 
-async function main() {
+// Core ingestion, callable both from the CLI (main) and programmatically (admin re-ingest
+// endpoint). Throws on failure rather than calling process.exit, so an API caller can catch it
+// and return a clean error instead of killing the server. `log` defaults to console.log; the
+// API passes a no-op to stay quiet. Returns a stats object.
+async function ingestManual({ log = console.log } = {}) {
     if (!env.hasApiKey()) {
-        console.error('NAVIGATOR_API_KEY is not set — cannot generate embeddings. Aborting.');
-        process.exit(1);
+        throw new Error('NAVIGATOR_API_KEY is not set — cannot generate embeddings.');
     }
     if (!env.hasManual()) {
-        console.error(`No manual found at ${env.MANUAL_PATH}. Add the file and re-run.`);
-        process.exit(1);
+        throw new Error(`No manual found at ${env.MANUAL_PATH}.`);
     }
 
     const rawText = fs.readFileSync(env.MANUAL_PATH, 'utf8');
     const { text: sanitizedText, redactionCount } = sanitizer.sanitize(rawText);
-    console.log(`Sanitized manual: redacted ${redactionCount} credential/PII match(es).`);
+    log(`Sanitized manual: redacted ${redactionCount} credential/PII match(es).`);
 
     const sections = parseSections(sanitizedText);
-    console.log(`Parsed ${sections.length} section(s).`);
+    log(`Parsed ${sections.length} section(s).`);
 
     const records = [];
     for (const section of sections) {
@@ -175,22 +177,21 @@ async function main() {
     }
 
     if (records.length === 0) {
-        console.error('No content chunks were produced from the manual. Nothing to ingest.');
-        process.exit(1);
+        throw new Error('No content chunks were produced from the manual. Nothing to ingest.');
     }
 
-    console.log(`Built ${records.length} chunk(s). Embedding via Navigator (${env.EMBED_MODEL})...`);
+    log(`Built ${records.length} chunk(s). Embedding via Navigator (${env.EMBED_MODEL})...`);
 
     const embeddings = [];
     for (let i = 0; i < records.length; i++) {
         const embedding = await navigator.embed(records[i].text);
         embeddings.push(embedding);
         if ((i + 1) % 10 === 0 || i === records.length - 1) {
-            console.log(`  embedded ${i + 1}/${records.length}`);
+            log(`  embedded ${i + 1}/${records.length}`);
         }
     }
 
-    console.log('Rebuilding Chroma collection (clean slate)...');
+    log('Rebuilding Chroma collection (clean slate)...');
     const collection = await chromaClient.resetCollection();
 
     const BATCH_SIZE = 100;
@@ -205,20 +206,34 @@ async function main() {
         });
     }
 
-    const publicCount = records.filter((r) => r.accessLevel === 'public').length;
-    const staffCount = records.length - publicCount;
-    console.log(`Done. Ingested ${records.length} chunk(s) into "${env.CHROMA_COLLECTION}" (${publicCount} public, ${staffCount} staff-only).`);
-    console.log('Tip: tag a section explicitly by putting a line containing only [PUBLIC] or [STAFF] right after its heading.');
+    const byLevel = records.reduce((acc, r) => {
+        acc[r.accessLevel] = (acc[r.accessLevel] || 0) + 1;
+        return acc;
+    }, {});
+    const breakdown = ['public', 'staff', 'supervisor', 'admin']
+        .filter((lvl) => byLevel[lvl])
+        .map((lvl) => `${byLevel[lvl]} ${lvl}`)
+        .join(', ');
+    log(`Done. Ingested ${records.length} chunk(s) into "${env.CHROMA_COLLECTION}" (${breakdown}).`);
+    return { chunks: records.length, sections: sections.length, byLevel, redactionCount };
+}
+
+async function main() {
+    try {
+        await ingestManual();
+        console.log('Tip: tag a section explicitly by putting a line containing only [PUBLIC], [STAFF], or [SUPERVISOR] right after its heading.');
+    } catch (error) {
+        console.error('Ingestion failed:', error.message);
+        process.exit(1);
+    }
 }
 
 if (require.main === module) {
-    main().catch((error) => {
-        console.error('Ingestion failed:', error.message);
-        process.exit(1);
-    });
+    main();
 }
 
 module.exports = {
+    ingestManual,
     isHeadingLine,
     parseAccessMarker,
     parseSections,

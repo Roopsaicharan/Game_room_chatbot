@@ -1,4 +1,6 @@
-const TIER_RANK = { public: 0, staff: 1, supervisor: 1, admin: 2 };
+// Ordered privilege ladder. supervisor now sits ABOVE staff (its own content tier), and admin
+// above supervisor. A higher-ranked role satisfies any lower-ranked requireTier() gate.
+const TIER_RANK = { public: 0, staff: 1, supervisor: 2, admin: 3 };
 
 function requireTier(minTier) {
     return (req, res, next) => {

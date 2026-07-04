@@ -39,8 +39,17 @@ function refreshKeywordIndex() {
     cachedAt = 0;
 }
 
+// Each role can retrieve its own tier and everything below it. supervisor unlocks the
+// [SUPERVISOR] tier (refunds, escalation, payment-card handling); admin sees everything.
+const LEVELS_BY_ROLE = {
+    public: ['public'],
+    staff: ['public', 'staff'],
+    supervisor: ['public', 'staff', 'supervisor'],
+    admin: ['public', 'staff', 'supervisor', 'admin'],
+};
+
 function allowedLevelsForRole(role) {
-    return role === 'public' ? ['public'] : ['public', 'staff'];
+    return LEVELS_BY_ROLE[role] || ['public'];
 }
 
 function whereForRole(role) {

@@ -15,11 +15,11 @@ function mockReqRes(tier) {
     return { req, res, next, getStatus: () => statusCode, getJson: () => jsonBody, wasNextCalled: () => nextCalled };
 }
 
-test('TIER_RANK ranks tiers as expected (public < staff == supervisor < admin)', () => {
+test('TIER_RANK ranks tiers as an ordered ladder (public < staff < supervisor < admin)', () => {
     assert.equal(TIER_RANK.public, 0);
     assert.equal(TIER_RANK.staff, 1);
-    assert.equal(TIER_RANK.supervisor, 1);
-    assert.equal(TIER_RANK.admin, 2);
+    assert.equal(TIER_RANK.supervisor, 2);
+    assert.equal(TIER_RANK.admin, 3);
 });
 
 test('no session at all is treated as public and rejected by requireTier("staff")', () => {
@@ -41,14 +41,24 @@ test('staff tier is rejected from an admin-gated route', () => {
     assert.equal(getStatus(), 403);
 });
 
-test('supervisor tier is accepted on a staff-gated route (treated same as staff in v1)', () => {
+test('supervisor tier is accepted on a staff-gated route (outranks staff)', () => {
     const { req, res, next, wasNextCalled } = mockReqRes('supervisor');
     requireTier('staff')(req, res, next);
     assert.equal(wasNextCalled(), true);
 });
 
-test('admin tier passes every gate', () => {
-    const { req, res, next, wasNextCalled } = mockReqRes('admin');
+test('supervisor tier is rejected from an admin-gated route (below admin)', () => {
+    const { req, res, next, getStatus } = mockReqRes('supervisor');
     requireTier('admin')(req, res, next);
-    assert.equal(wasNextCalled(), true);
+    assert.equal(getStatus(), 403);
+});
+
+test('admin tier passes every gate, including a supervisor-gated one', () => {
+    const adminOnStaff = mockReqRes('admin');
+    requireTier('staff')(adminOnStaff.req, adminOnStaff.res, adminOnStaff.next);
+    assert.equal(adminOnStaff.wasNextCalled(), true);
+
+    const adminOnSupervisor = mockReqRes('admin');
+    requireTier('supervisor')(adminOnSupervisor.req, adminOnSupervisor.res, adminOnSupervisor.next);
+    assert.equal(adminOnSupervisor.wasNextCalled(), true);
 });

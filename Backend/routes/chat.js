@@ -8,6 +8,7 @@ const router_ = require('../services/router');
 const liveInfo = require('../services/liveInfo');
 const { searchManual } = require('../services/searchManual');
 const outputGuard = require('../services/outputGuard');
+const analyticsStore = require('../services/analyticsStore');
 
 const router = express.Router();
 
@@ -193,6 +194,7 @@ router.post('/', chatLimiter, async (req, res) => {
         // of refusing, since nothing in code actually enforced it.
         if (intent === 'unsupported') {
             recordTurn(req, userMessage, CANNED_RESPONSES.OUT_OF_SCOPE);
+            analyticsStore.logQuestion({ role: userRole, intent, question: userMessage, answered: false, citationType: null });
             return res.json({ response: CANNED_RESPONSES.OUT_OF_SCOPE });
         }
 
@@ -226,6 +228,16 @@ router.post('/', chatLimiter, async (req, res) => {
         }
 
         recordTurn(req, userMessage, reply);
+        // A turn "counts as answered" when it produced a grounded, non-canned reply. Refusals
+        // and "no evidence" non-answers are logged as unanswered — that's the admin signal for
+        // which questions the current knowledge base can't yet handle.
+        analyticsStore.logQuestion({
+            role: userRole,
+            intent,
+            question: userMessage,
+            answered: !isCannedResponse(reply),
+            citationType: citation ? citation.type : null,
+        });
         res.json({ response: reply });
     } catch (error) {
         console.error('Chat error:', error.message);
@@ -237,6 +249,23 @@ router.post('/', chatLimiter, async (req, res) => {
 // is preserved; only the chat memory is cleared).
 router.post('/reset', (req, res) => {
     if (req.session) req.session.history = [];
+    res.json({ ok: true });
+});
+
+// Thumbs up/down on an answer. Kept lightweight and public — the endpoint the (future) UI
+// buttons post to; also usable now via API. The ratings feed the admin feedback log.
+router.post('/feedback', (req, res) => {
+    const body = req.body || {};
+    const rating = body.rating === 'up' ? 'up' : body.rating === 'down' ? 'down' : null;
+    if (!rating) {
+        return res.status(400).json({ error: "rating must be 'up' or 'down'" });
+    }
+    analyticsStore.logFeedback({
+        role: req.session?.tier || 'public',
+        rating,
+        question: body.question,
+        answer: body.answer,
+    });
     res.json({ ok: true });
 });
 
