@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "ingest": "node scripts/ingest.js",
+    "eval": "node scripts/eval.js",
     "test": "node --test --test-concurrency=1 test/"
   },
   "keywords": [],
