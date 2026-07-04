@@ -1,4 +1,28 @@
+# Backend/frontend dependency + local artifacts
 node_modules/
-.env
-vector_store.json
 .DS_Store
+
+# Claude Code project guidance — local only, not shared via git
+CLAUDE.md
+
+# Secrets — never commit
+Backend/.env
+.env
+
+# Private Game Room operational materials and generated copies
+Game Room Operation Manual*.pdf
+manual_clean.txt
+manual_text.txt
+manual_data.js
+vector_store.json
+
+# Sensitive runtime data — never commit
+Backend/private/
+private/
+
+# Chroma vector DB (separate server, project root) — data + local venv
+chroma_data/
+.venv-chroma/
+
+# Stray runtime logs
+*.log

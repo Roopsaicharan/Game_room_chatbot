@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Staff Login | Reitz Union Game Room</title>
+    <link rel="icon" href="gator_avatar.png" type="image/png">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="auth-page">
+        <div class="auth-card">
+            <h1>Staff Login</h1>
+            <p class="auth-sub">Enter the Game Room staff password to unlock staff-level assistant access.</p>
+            <form id="staffLoginForm">
+                <div class="auth-field">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" name="password" autocomplete="current-password" required>
+                </div>
+                <button type="submit" class="btn btn-uf-orange" id="loginBtn">Log In</button>
+                <p class="auth-error" id="authError"></p>
+            </form>
+            <a class="auth-back-link" href="index.html">&larr; Back to Game Room home</a>
+        </div>
+    </div>
+
+    <script>
+        const form = document.getElementById('staffLoginForm');
+        const errorEl = document.getElementById('authError');
+        const loginBtn = document.getElementById('loginBtn');
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            errorEl.textContent = '';
+            loginBtn.disabled = true;
+
+            const password = document.getElementById('password').value;
+            try {
+                const res = await fetch('/api/auth/staff-login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password }),
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    errorEl.textContent = data.error || 'Login failed';
+                    loginBtn.disabled = false;
+                    return;
+                }
+                window.location.href = 'index.html';
+            } catch (err) {
+                errorEl.textContent = 'Could not reach the server. Please try again.';
+                loginBtn.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>

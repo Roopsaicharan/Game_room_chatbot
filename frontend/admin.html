@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin | Reitz Union Game Room</title>
+    <link rel="icon" href="gator_avatar.png" type="image/png">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="auth-page">
+        <div class="auth-card" id="loginCard">
+            <h1>Admin Login</h1>
+            <p class="auth-sub">Enter the admin password to manage account credentials.</p>
+            <form id="adminLoginForm">
+                <div class="auth-field">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" name="password" autocomplete="current-password" required>
+                </div>
+                <button type="submit" class="btn btn-uf-orange" id="loginBtn">Log In</button>
+                <p class="auth-error" id="loginError"></p>
+            </form>
+            <a class="auth-back-link" href="index.html">&larr; Back to Game Room home</a>
+        </div>
+
+        <div class="auth-card" id="panelCard" style="display: none;">
+            <h1>Admin Panel</h1>
+            <p class="auth-sub">Change the staff or admin password. Changes take effect immediately.</p>
+
+            <form id="staffPasswordForm">
+                <div class="auth-field">
+                    <label for="newStaffPassword">New Staff Password</label>
+                    <input type="password" id="newStaffPassword" minlength="4" required>
+                </div>
+                <button type="submit" class="btn btn-uf-orange">Update Staff Password</button>
+                <p class="auth-error" id="staffPwError"></p>
+                <p class="auth-success" id="staffPwSuccess"></p>
+            </form>
+
+            <hr class="auth-divider">
+
+            <form id="adminPasswordForm">
+                <div class="auth-field">
+                    <label for="newAdminPassword">New Admin Password</label>
+                    <input type="password" id="newAdminPassword" minlength="4" required>
+                </div>
+                <button type="submit" class="btn btn-uf-orange">Update Admin Password</button>
+                <p class="auth-error" id="adminPwError"></p>
+                <p class="auth-success" id="adminPwSuccess"></p>
+            </form>
+
+            <a class="auth-back-link" href="#" id="logoutLink">Log out</a>
+        </div>
+    </div>
+
+    <script>
+        const loginCard = document.getElementById('loginCard');
+        const panelCard = document.getElementById('panelCard');
+
+        async function checkSession() {
+            const res = await fetch('/api/auth/session');
+            const data = await res.json();
+            if (data.tier === 'admin') {
+                loginCard.style.display = 'none';
+                panelCard.style.display = 'block';
+            }
+        }
+        checkSession();
+
+        document.getElementById('adminLoginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const errorEl = document.getElementById('loginError');
+            const btn = document.getElementById('loginBtn');
+            errorEl.textContent = '';
+            btn.disabled = true;
+
+            const password = document.getElementById('password').value;
+            try {
+                const res = await fetch('/api/auth/admin-login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password }),
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    errorEl.textContent = data.error || 'Login failed';
+                    btn.disabled = false;
+                    return;
+                }
+                loginCard.style.display = 'none';
+                panelCard.style.display = 'block';
+            } catch (err) {
+                errorEl.textContent = 'Could not reach the server. Please try again.';
+                btn.disabled = false;
+            }
+        });
+
+        async function submitPasswordChange({ endpoint, inputId, errorId, successId }) {
+            const errorEl = document.getElementById(errorId);
+            const successEl = document.getElementById(successId);
+            errorEl.textContent = '';
+            successEl.textContent = '';
+
+            const newPassword = document.getElementById(inputId).value;
+            try {
+                const res = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ newPassword }),
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    errorEl.textContent = data.error || 'Update failed';
+                    return;
+                }
+                successEl.textContent = 'Password updated.';
+                document.getElementById(inputId).value = '';
+            } catch (err) {
+                errorEl.textContent = 'Could not reach the server. Please try again.';
+            }
+        }
+
+        document.getElementById('staffPasswordForm').addEventListener('submit', (e) => {
+            e.preventDefault();
+            submitPasswordChange({
+                endpoint: '/api/auth/change-staff-password',
+                inputId: 'newStaffPassword',
+                errorId: 'staffPwError',
+                successId: 'staffPwSuccess',
+            });
+        });
+
+        document.getElementById('adminPasswordForm').addEventListener('submit', (e) => {
+            e.preventDefault();
+            submitPasswordChange({
+                endpoint: '/api/auth/change-admin-password',
+                inputId: 'newAdminPassword',
+                errorId: 'adminPwError',
+                successId: 'adminPwSuccess',
+            });
+        });
+
+        document.getElementById('logoutLink').addEventListener('click', async (e) => {
+            e.preventDefault();
+            await fetch('/api/auth/logout', { method: 'POST' });
+            window.location.href = 'index.html';
+        });
+    </script>
+</body>
+</html>

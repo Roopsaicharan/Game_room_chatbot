@@ -5,12 +5,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Game Room | Reitz Union - University of Florida</title>
     <meta name="description" content="Reitz Union Game Room at the University of Florida">
+    <link rel="icon" href="gator_avatar.png" type="image/png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700;900&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+    <!-- Role status banner (shown when logged in as staff/admin) -->
+    <div class="role-banner" id="roleBanner">
+        <span id="roleBannerText"></span>
+        <button id="roleBannerLogout">Log out</button>
+    </div>
+
     <!-- Utility Bar -->
     <div class="utility-bar">
         <div class="utility-container">
@@ -81,15 +88,19 @@
             </div>
         </section>
 
-        <!-- Employee Quick Links / Chatbot triggers -->
+        <!-- Chatbot entry points -->
         <section class="content-section bg-light" id="staff-resources">
             <div class="container text-center">
-                <h2 class="section-title">STAFF RESOURCES</h2>
-                <p class="section-desc">Access employee guidelines, POS tutorials, and emergency procedures using the Gator Assistant.</p>
+                <h2 class="section-title">ASK THE GATOR ASSISTANT</h2>
+                <p class="section-desc">Visitors can ask about hours, pricing, and games right away. Game Room staff and admins can log in for additional access.</p>
                 <div class="staff-actions">
                     <button class="btn btn-uf-orange" id="heroChatBtn">
-                        Open Gator Assistant
+                        Chat as a Visitor
                     </button>
+                </div>
+                <div class="entry-links">
+                    <a href="staff.html">Staff Login</a>
+                    <a href="admin.html">Admin</a>
                 </div>
             </div>
         </section>
@@ -123,6 +134,7 @@
         </button>
 
         <div class="chat-panel" id="chatPanel">
+            <div class="chat-resize-handle" id="chatResizeHandle" aria-hidden="true"></div>
             <div class="chat-header">
                 <div class="chat-header-info">
                     <img src="gator_avatar.png" alt="Gator" class="chat-avatar">
@@ -152,8 +164,6 @@
     </div>
 
     <!-- Scripts -->
-    <script src="manual_data.js"></script>
-    <script src="chatbot.js"></script>
     <script src="app.js"></script>
 </body>
 </html>
