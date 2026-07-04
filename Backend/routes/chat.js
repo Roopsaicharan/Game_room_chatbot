@@ -98,6 +98,27 @@ async function safeSearchManual(message, role) {
     }
 }
 
+function liveCitation(result) {
+    return { type: 'live', sourceUrl: result.sourceUrl, lastChecked: result.lastChecked };
+}
+function manualCitation(passages) {
+    return { type: 'manual', sections: topSections(passages) };
+}
+
+// Deterministic same-day closure guard, reused wherever live content is included. Returns the
+// bracketed directive to append, or '' if today isn't in a closure notice.
+function closureAlertText(content) {
+    const alert = liveInfo.closureAlertForToday(content);
+    if (!alert) return '';
+    return `\n\n[CLOSURE ALERT — the live page's closure/holiday notice references TODAY (${alert.date}). The regular weekly hours do NOT override this. Read the notice ("${alert.snippet}"): if it means we are closed or closing early today, state that plainly. If it is at all ambiguous, tell the user we may be closed or on reduced holiday hours today and to call 352-392-1637 to confirm. Do NOT confidently claim we are open over a closure notice for today.]`;
+}
+
+// A manual-intent question that also brushes a volatile/current topic (hours, pricing, "open
+// today", "free") benefits from the live page too. Gate the manual→live enrichment on these
+// terms so pure policy questions (uniforms, refund steps) don't get the hours/pricing page
+// dumped into their context as noise.
+const LIVE_RELEVANT = /\b(hour|open|clos|price|cost|rate|fee|today|tonight|right now|free|when|schedul|availab|holiday)/i;
+
 async function buildToolContext(intent, message, role) {
     if (intent === 'live') {
         const topic = liveInfo.detectTopic(message);
@@ -112,17 +133,13 @@ async function buildToolContext(intent, message, role) {
 
         if (result.content) {
             let block = `LIVE_INFO (from ${result.sourceUrl}, fetched ${result.lastChecked}):\n${result.content}${result.closureNoted ? '\n[Note: the word "closed" appears on this page — check whether a reason is given before stating one.]' : ''}`;
-            // Hard, code-level guard against the worst failure mode: asserting "open" on a day the
-            // page flags as a closure/holiday. If today's date sits inside a closure notice, tell
-            // the model in no uncertain terms not to override it with the weekly hours.
-            const alert = liveInfo.closureAlertForToday(result.content);
-            if (alert) {
-                block += `\n\n[CLOSURE ALERT — the live page's closure/holiday notice references TODAY (${alert.date}). The regular weekly hours do NOT override this. Read the notice ("${alert.snippet}"): if it means we are closed or closing early today, state that plainly. If it is at all ambiguous, tell the user we may be closed or on reduced holiday hours today and to call 352-392-1637 to confirm. Do NOT confidently claim we are open over a closure notice for today.]`;
-            }
+            block += closureAlertText(result.content);
+            const citations = [liveCitation(result)];
             if (manualPassages.length > 0) {
                 block += `\n\nSUPPLEMENTARY_MANUAL_CONTEXT (from the reference manual — use for policies/details the live page above doesn't cover; the live page remains authoritative for hours, pricing, and closures):\n${formatPassages(manualPassages)}`;
+                citations.push(manualCitation(manualPassages));
             }
-            return { block, citation: { type: 'live', sourceUrl: result.sourceUrl, lastChecked: result.lastChecked } };
+            return { block, citations };
         }
 
         // The live page couldn't be reached (down, blocked, or redesigned — see the tripwire
@@ -131,31 +148,43 @@ async function buildToolContext(intent, message, role) {
         // hedges on currency (a manual value can be stale in a way a live fetch isn't).
         if (manualPassages.length > 0) {
             const block = `LIVE_INFO: (none — the live page could not be reached)\nFALLBACK_MANUAL_CONTEXT (from the reference manual, not live-verified — may be outdated):\n${formatPassages(manualPassages)}`;
-            return { block, citation: { type: 'manual', sections: topSections(manualPassages) } };
+            return { block, citations: [manualCitation(manualPassages)] };
         }
 
-        return { block: 'LIVE_INFO: (none — the live page could not be reached, and no matching manual passage was found either)', citation: null };
+        return { block: 'LIVE_INFO: (none — the live page could not be reached, and no matching manual passage was found either)', citations: [] };
     }
 
     if (intent === 'manual') {
         if (!env.hasManual()) {
-            return { block: 'RETRIEVED_CONTEXT: (none — no manual has been loaded yet)', citation: null };
+            return { block: 'RETRIEVED_CONTEXT: (none — no manual has been loaded yet)', citations: [] };
         }
         let passages = [];
         try {
             ({ passages } = await searchManual(message, role));
         } catch (error) {
             console.error('Manual search error:', error.message);
-            return { block: 'RETRIEVED_CONTEXT: (none — the manual knowledge base could not be reached)', citation: null };
+            return { block: 'RETRIEVED_CONTEXT: (none — the manual knowledge base could not be reached)', citations: [] };
         }
         if (passages.length === 0) {
-            return { block: 'RETRIEVED_CONTEXT: (none — no matching passages found)', citation: null };
+            return { block: 'RETRIEVED_CONTEXT: (none — no matching passages found)', citations: [] };
         }
-        const block = `RETRIEVED_CONTEXT:\n${formatPassages(passages)}`;
-        return { block, citation: { type: 'manual', sections: topSections(passages) } };
+        let block = `RETRIEVED_CONTEXT:\n${formatPassages(passages)}`;
+        const citations = [manualCitation(passages)];
+
+        // Combine in current data when it's both relevant AND already cached (no extra fetch),
+        // so a policy question that also touches hours/pricing gets a precise, current answer.
+        if (LIVE_RELEVANT.test(message)) {
+            const cachedLive = liveInfo.getCachedLiveInfo(liveInfo.detectTopic(message));
+            if (cachedLive && cachedLive.content) {
+                block += `\n\nSUPPLEMENTARY_LIVE_INFO (current data from ${cachedLive.sourceUrl}, fetched ${cachedLive.lastChecked} — authoritative for hours/pricing/closures; ignore anything here unrelated to the question):\n${cachedLive.content}`;
+                block += closureAlertText(cachedLive.content);
+                citations.push(liveCitation(cachedLive));
+            }
+        }
+        return { block, citations };
     }
 
-    return { block: '', citation: null };
+    return { block: '', citations: [] };
 }
 
 router.post('/', chatLimiter, async (req, res) => {
@@ -205,7 +234,7 @@ router.post('/', chatLimiter, async (req, res) => {
             return res.json({ response: CANNED_RESPONSES.OUT_OF_SCOPE });
         }
 
-        const { block, citation } = await buildToolContext(intent, standaloneQuery, userRole);
+        const { block, citations } = await buildToolContext(intent, standaloneQuery, userRole);
 
         const messages = [
             { role: 'system', content: buildSystemPrompt(userRole, currentDateTime) },
@@ -226,13 +255,14 @@ router.post('/', chatLimiter, async (req, res) => {
         const { text: guardedReply } = outputGuard.guard(reply);
         reply = guardedReply;
 
-        if (citation && !isCannedResponse(reply)) {
-            if (citation.type === 'live') {
-                reply += `\n\nSource: ${citation.sourceUrl} (last checked ${formatLastChecked(citation.lastChecked)})`;
-            } else if (citation.type === 'manual') {
-                reply += `\n\nSource: Game Room Manual — ${citation.sections.join(', ')}`;
-            }
-        }
+        // Sources are returned as STRUCTURED DATA (not appended to the answer text) so the UI can
+        // render a compact hover badge instead of a long "Source: ..." footer. A canned refusal
+        // isn't grounded in the retrieved passages, so it carries no sources.
+        const sources = isCannedResponse(reply)
+            ? []
+            : citations.map((c) => c.type === 'live'
+                ? { type: 'live', label: 'union.ufl.edu (live)', url: c.sourceUrl, lastChecked: c.lastChecked ? formatLastChecked(c.lastChecked) : null }
+                : { type: 'manual', label: 'Game Room Manual', detail: c.sections.join(', ') });
 
         recordTurn(req, userMessage, reply);
         // A turn "counts as answered" when it produced a grounded, non-canned reply. Refusals
@@ -243,9 +273,9 @@ router.post('/', chatLimiter, async (req, res) => {
             intent,
             question: userMessage,
             answered: !isCannedResponse(reply),
-            citationType: citation ? citation.type : null,
+            citationType: sources[0] ? sources[0].type : null,
         });
-        res.json({ response: reply });
+        res.json({ response: reply, sources });
     } catch (error) {
         console.error('Chat error:', error.message);
         res.status(500).json({ response: 'Sorry, I ran into a problem answering that. Please try again in a moment.' });

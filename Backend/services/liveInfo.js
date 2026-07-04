@@ -141,4 +141,13 @@ async function fetchLiveInfo(topic) {
     }
 }
 
-module.exports = { fetchLiveInfo, detectTopic, extractText, closureAlertForToday, ALLOWLIST, MAX_CONTENT_CHARS };
+// Cache-only read: returns an already-fetched page WITHOUT triggering a network fetch, so a
+// manual-intent answer can be enriched with current hours/pricing for free when the data is
+// already warm. Returns a stale entry too (its lastChecked conveys the age); a cold cache just
+// returns null and the answer stays manual-only.
+function getCachedLiveInfo(topic) {
+    const cached = cache.get(topic);
+    return cached && cached.content ? cached : null;
+}
+
+module.exports = { fetchLiveInfo, getCachedLiveInfo, detectTopic, extractText, closureAlertForToday, ALLOWLIST, MAX_CONTENT_CHARS };

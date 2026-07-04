@@ -1,0 +1,800 @@
+/* ===================================
+   REITZ UNION GAME ROOM
+   Official UF Light Theme
+   =================================== */
+
+:root {
+    /* Colors from screenshot */
+    --uf-blue: #00529b;
+    --uf-blue-dark: #003d73;
+    --uf-orange: #f37021; /* Slightly softer orange in screenshot, but we'll use #fa4616 if needed, actually let's stick closer to screenshot */
+    --uf-orange-classic: #fa4616;
+    
+    --bg-white: #ffffff;
+    --bg-light: #f5f5f5;
+    
+    --text-dark: #333333;
+    --text-muted: #666666;
+    --text-light: #ffffff;
+    
+    --border-color: #dddddd;
+
+    --font-family: 'Roboto', 'Inter', sans-serif;
+}
+
+*, *::before, *::after {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: var(--font-family);
+    background-color: var(--bg-white);
+    color: var(--text-dark);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+}
+
+a {
+    text-decoration: none;
+    color: inherit;
+}
+
+ul {
+    list-style: none;
+}
+
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 20px;
+}
+
+.text-center { text-align: center; }
+.bg-light { background-color: var(--bg-light); }
+
+/* ===================================
+   UTILITY BAR
+   =================================== */
+.utility-bar {
+    background-color: var(--uf-blue);
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+
+.utility-container {
+    max-width: 1200px;
+    margin: 0 auto;
+    display: flex;
+    justify-content: flex-end;
+    padding: 8px 20px;
+    gap: 20px;
+}
+
+.utility-container a {
+    color: var(--text-light);
+    font-size: 0.8rem;
+    font-weight: 500;
+    letter-spacing: 0.05em;
+}
+
+.utility-hours {
+    background-color: var(--bg-white);
+    color: var(--uf-blue) !important;
+    padding: 2px 10px;
+    border-radius: 2px;
+}
+
+/* ===================================
+   HEADER
+   =================================== */
+.main-header {
+    background-color: var(--uf-blue);
+    padding: 0;
+}
+
+.header-container {
+    max-width: 1200px;
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.header-logo-link {
+    display: flex;
+    align-items: center;
+    color: var(--text-light);
+}
+
+.uf-logo-box {
+    background-color: var(--uf-orange-classic);
+    color: var(--text-light);
+    font-size: 2rem;
+    font-weight: 900;
+    padding: 15px 20px;
+    font-family: serif; /* To mimic the UF logo */
+    margin-right: 15px;
+}
+
+.header-titles {
+    display: flex;
+    flex-direction: column;
+}
+
+.title-primary {
+    font-size: 1rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    line-height: 1.2;
+}
+
+.title-secondary {
+    font-size: 0.75rem;
+    font-weight: 500;
+    letter-spacing: 0.05em;
+}
+
+.main-nav {
+    display: flex;
+    gap: 24px;
+    padding-right: 20px;
+}
+
+.main-nav a {
+    color: var(--text-light);
+    font-size: 0.9rem;
+    font-weight: 500;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    transition: opacity 0.2s;
+}
+
+.main-nav a:hover {
+    opacity: 0.8;
+}
+
+/* ===================================
+   HERO SECTION
+   =================================== */
+.hero {
+    position: relative;
+    height: 350px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+.hero-bg-img {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    z-index: 1;
+}
+
+.hero-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 82, 155, 0.75); /* Blue overlay */
+    z-index: 2;
+}
+
+.hero-content {
+    position: relative;
+    z-index: 3;
+    text-align: center;
+}
+
+.hero-title {
+    color: var(--text-light);
+    font-size: 3.5rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+}
+
+/* ===================================
+   CONTENT SECTIONS
+   =================================== */
+.content-section {
+    padding: 60px 20px;
+    max-width: 1000px;
+    margin: 0 auto;
+}
+
+.section-title {
+    color: var(--uf-blue);
+    font-size: 2rem;
+    font-weight: 700;
+    margin-bottom: 20px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.left-align {
+    text-align: left;
+}
+
+.section-desc {
+    font-size: 1.1rem;
+    color: var(--text-muted);
+    max-width: 800px;
+    margin: 0 auto;
+}
+
+/* Offerings Layout */
+.offerings-section {
+    display: grid;
+    grid-template-columns: 3fr 2fr;
+    gap: 40px;
+    align-items: center;
+}
+
+.offerings-image img {
+    width: 100%;
+    border-radius: 4px;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+}
+
+.offerings-list ul {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.offerings-list li {
+    font-size: 1.1rem;
+    color: var(--text-muted);
+    position: relative;
+    padding-left: 15px;
+}
+
+.offerings-list li::before {
+    content: "•";
+    color: var(--uf-orange-classic);
+    position: absolute;
+    left: 0;
+    font-size: 1.5rem;
+    line-height: 1;
+    top: -2px;
+}
+
+/* Buttons */
+.btn {
+    display: inline-block;
+    padding: 12px 24px;
+    border: none;
+    border-radius: 4px;
+    font-size: 1rem;
+    font-weight: 500;
+    cursor: pointer;
+    text-transform: uppercase;
+    transition: background-color 0.2s;
+}
+
+.btn-uf-orange {
+    background-color: var(--uf-orange-classic);
+    color: var(--text-light);
+}
+
+.btn-uf-orange:hover {
+    background-color: #d83b0f;
+}
+
+.staff-actions {
+    margin-top: 30px;
+}
+
+/* ===================================
+   FOOTER
+   =================================== */
+.footer {
+    background-color: var(--uf-blue-dark);
+    color: var(--text-light);
+    padding: 40px 0;
+    text-align: center;
+}
+
+.footer-sub {
+    font-size: 0.8rem;
+    opacity: 0.7;
+    margin-top: 10px;
+}
+
+/* ===================================
+   CHAT WIDGET (Adapted for Light Theme)
+   =================================== */
+.chat-widget {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    z-index: 9999;
+}
+
+.chat-fab {
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    background-color: var(--uf-orange-classic);
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    box-shadow: 0 4px 15px rgba(250, 70, 22, 0.4);
+    transition: transform 0.2s;
+}
+
+.chat-fab:hover {
+    transform: scale(1.05);
+}
+
+.fab-icon {
+    position: absolute;
+    transition: all 0.3s ease;
+}
+
+.close-icon {
+    opacity: 0;
+    transform: rotate(-90deg) scale(0.5);
+}
+
+.chat-widget.open .open-icon {
+    opacity: 0;
+    transform: rotate(90deg) scale(0.5);
+}
+
+.chat-widget.open .close-icon {
+    opacity: 1;
+    transform: rotate(0) scale(1);
+}
+
+.chat-panel {
+    position: absolute;
+    bottom: 76px;
+    right: 0;
+    width: 380px;
+    height: 500px;
+    min-width: 320px;
+    min-height: 400px;
+    max-width: min(640px, calc(100vw - 32px));
+    max-height: min(760px, calc(100vh - 120px));
+    background: var(--bg-white);
+    border-radius: 8px;
+    box-shadow: 0 5px 25px rgba(0,0,0,0.15);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(20px);
+    transition: all 0.3s ease;
+}
+
+.chat-widget.open .chat-panel {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+}
+
+/* Dragging changes width/height every frame — the open/close transition would fight that,
+   so it's suspended for the duration of the drag (see .resizing toggle in app.js). */
+.chat-panel.resizing {
+    transition: none;
+    user-select: none;
+}
+
+/* Grip sits in the top-left corner: this panel is anchored by bottom+right, so growing it
+   extends the box up and to the left, toward this handle — the natural drag direction. */
+.chat-resize-handle {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 20px;
+    height: 20px;
+    z-index: 10;
+    cursor: nwse-resize;
+    touch-action: none;
+}
+
+.chat-resize-handle::before {
+    content: '';
+    position: absolute;
+    top: 7px;
+    left: 7px;
+    width: 9px;
+    height: 9px;
+    border-top: 2px solid rgba(255, 255, 255, 0.55);
+    border-left: 2px solid rgba(255, 255, 255, 0.55);
+    border-radius: 3px 0 0 0;
+    transition: border-color 0.15s ease;
+}
+
+.chat-resize-handle:hover::before,
+.chat-panel.resizing .chat-resize-handle::before {
+    border-color: rgba(255, 255, 255, 0.95);
+}
+
+.chat-header {
+    background-color: var(--uf-blue);
+    color: white;
+    padding: 15px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.chat-header-info {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.chat-avatar {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    border: 2px solid white;
+    background: white;
+}
+
+.chat-header-info h4 {
+    font-size: 0.9rem;
+    margin: 0;
+}
+
+.chat-status {
+    font-size: 0.75rem;
+    opacity: 0.8;
+}
+
+.chat-close {
+    background: none;
+    border: none;
+    color: white;
+    cursor: pointer;
+    opacity: 0.8;
+}
+
+.chat-close:hover {
+    opacity: 1;
+}
+
+.chat-messages {
+    flex: 1;
+    padding: 15px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    background-color: #fafafa;
+}
+
+.message {
+    display: flex;
+    gap: 10px;
+    max-width: 85%;
+}
+
+.message.bot {
+    align-self: flex-start;
+}
+
+.message.user {
+    align-self: flex-end;
+    flex-direction: row-reverse;
+}
+
+.message-avatar {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.8rem;
+    background-color: var(--bg-white);
+    border: 1px solid var(--border-color);
+}
+
+.message-content {
+    padding: 10px 15px;
+    border-radius: 8px;
+    font-size: 0.9rem;
+}
+
+.message-content p {
+    margin: 0 0 8px 0;
+}
+
+.message-content p:last-child {
+    margin-bottom: 0;
+}
+
+.message-content ul {
+    margin: 0 0 8px 0;
+    padding-left: 1.2em;
+}
+
+.message-content ul:last-child {
+    margin-bottom: 0;
+}
+
+.message.bot .message-content {
+    background-color: var(--bg-white);
+    border: 1px solid var(--border-color);
+    color: var(--text-dark);
+}
+
+.message.user .message-content {
+    background-color: var(--uf-blue);
+    color: white;
+}
+
+.chat-input-area {
+    padding: 15px;
+    background: white;
+    border-top: 1px solid var(--border-color);
+    display: flex;
+    gap: 10px;
+}
+
+.chat-input {
+    flex: 1;
+    padding: 10px 15px;
+    border: 1px solid var(--border-color);
+    border-radius: 20px;
+    outline: none;
+}
+
+.chat-input:focus {
+    border-color: var(--uf-blue);
+}
+
+.chat-send {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background-color: var(--uf-orange-classic);
+    color: white;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.chat-send:disabled {
+    background-color: var(--border-color);
+    cursor: not-allowed;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .main-nav, .utility-bar {
+        display: none;
+    }
+    
+    .offerings-section {
+        grid-template-columns: 1fr;
+    }
+    
+    .hero-title {
+        font-size: 2.5rem;
+    }
+    
+    .chat-panel {
+        width: calc(100vw - 32px);
+        right: -8px;
+    }
+
+    /* Resizing conflicts with the forced full-width mobile layout above. */
+    .chat-resize-handle {
+        display: none;
+    }
+}
+
+/* ===================================
+   AUTH PAGES (staff.html / admin.html)
+   =================================== */
+.auth-page {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: var(--uf-blue);
+    padding: 24px;
+}
+
+.auth-card {
+    background-color: var(--bg-white);
+    border-radius: 8px;
+    padding: 40px;
+    max-width: 360px;
+    width: 100%;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.25);
+}
+
+.auth-card h1 {
+    color: var(--uf-blue);
+    font-size: 1.4rem;
+    margin: 0 0 8px 0;
+    text-align: center;
+}
+
+.auth-card p.auth-sub {
+    color: #666;
+    font-size: 0.85rem;
+    text-align: center;
+    margin: 0 0 24px 0;
+}
+
+.auth-field {
+    margin-bottom: 16px;
+}
+
+.auth-field label {
+    display: block;
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--text-dark);
+    margin-bottom: 6px;
+}
+
+.auth-field input {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    font-size: 1rem;
+    box-sizing: border-box;
+}
+
+.auth-card .btn {
+    width: 100%;
+    margin-top: 8px;
+}
+
+.auth-error {
+    color: #c0392b;
+    font-size: 0.85rem;
+    margin: 8px 0 0 0;
+    min-height: 1.2em;
+}
+
+.auth-success {
+    color: #1e7e34;
+    font-size: 0.85rem;
+    margin: 8px 0 0 0;
+    min-height: 1.2em;
+}
+
+.auth-back-link {
+    display: block;
+    text-align: center;
+    margin-top: 20px;
+    font-size: 0.85rem;
+    color: var(--uf-blue);
+    text-decoration: none;
+}
+
+.auth-back-link:hover {
+    text-decoration: underline;
+}
+
+.auth-divider {
+    border: none;
+    border-top: 1px solid var(--border-color);
+    margin: 28px 0;
+}
+
+.entry-links {
+    display: flex;
+    gap: 16px;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin-top: 20px;
+}
+
+.entry-links a {
+    color: var(--uf-blue);
+    font-size: 0.85rem;
+    text-decoration: none;
+    font-weight: 500;
+}
+
+.entry-links a:hover {
+    text-decoration: underline;
+}
+
+.role-banner {
+    display: none;
+    align-items: center;
+    justify-content: space-between;
+    background-color: var(--uf-blue);
+    color: #fff;
+    padding: 8px 15px;
+    font-size: 0.8rem;
+}
+
+.role-banner.visible {
+    display: flex;
+}
+
+.role-banner button {
+    background: none;
+    border: 1px solid rgba(255, 255, 255, 0.5);
+    color: #fff;
+    border-radius: 4px;
+    padding: 3px 10px;
+    font-size: 0.75rem;
+    cursor: pointer;
+}
+
+.role-banner button:hover {
+    background: rgba(255, 255, 255, 0.15);
+}
+
+/* ============ Source badge (hover to see where an answer came from) ============ */
+/* Replaces the long "Source: ..." footer with a compact ⓘ the user hovers/focuses. */
+.source-badge {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    margin-left: 6px;
+    vertical-align: middle;
+    cursor: help;
+    outline: none;
+}
+.source-icon {
+    font-size: 0.85rem;
+    line-height: 1;
+    color: var(--uf-blue);
+    opacity: 0.55;
+    transition: opacity 0.15s ease;
+}
+.source-badge:hover .source-icon,
+.source-badge:focus .source-icon {
+    opacity: 1;
+}
+.source-tooltip {
+    position: absolute;
+    bottom: 145%;
+    right: 0;
+    z-index: 20;
+    min-width: 180px;
+    max-width: 280px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: #1f2733;
+    color: #fff;
+    font-size: 0.72rem;
+    line-height: 1.45;
+    text-align: left;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(4px);
+    transition: opacity 0.15s ease, transform 0.15s ease, visibility 0.15s;
+    pointer-events: none;
+    white-space: normal;
+}
+.source-tooltip strong {
+    color: var(--uf-orange-classic);
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.source-badge:hover .source-tooltip,
+.source-badge:focus .source-tooltip {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+}
