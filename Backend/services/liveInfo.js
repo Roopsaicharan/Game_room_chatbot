@@ -1,3 +1,5 @@
+const fs = require('fs');
+const path = require('path');
 const cheerio = require('cheerio');
 const env = require('../config/env');
 
@@ -7,13 +9,45 @@ const ALLOWLIST = {
     esports: 'https://union.ufl.edu/gatoresportscenter/',
 };
 
-const cache = new Map(); // topic -> { content, sourceUrl, lastChecked, closureNoted, expiresAt }
 const FETCH_TIMEOUT_MS = 10000;
-// Real extracted pages run 6000-8000+ chars (truncated at 6000). If UF ever redesigns these
-// pages to render content client-side via JS, cheerio (which only parses static HTML) would
-// silently start returning near-empty content instead of erroring — this tripwire makes
-// that failure visible in logs instead of silent.
+// The gameroom page runs ~6600 chars and the esports page more; the old 6000 cap sliced off
+// the tail (reservation payment terms, contact info). 15000 captures the full current pages
+// with headroom while still bounding token cost if a page balloons unexpectedly.
+const MAX_CONTENT_CHARS = 15000;
+// If UF ever redesigns these pages to render content client-side via JS, cheerio (which only
+// parses static HTML) would silently start returning near-empty content instead of erroring —
+// this tripwire makes that failure visible in logs instead of silent.
 const MIN_EXPECTED_CONTENT_CHARS = 500;
+
+// Disk-backed so a restart doesn't drop every cached page and trigger a cold-fetch stampede on
+// the union.ufl.edu pages. In-memory Map is the hot path; the file is the durable backing store.
+// (Still single-instance — a multi-instance deployment would want a shared cache like Redis.)
+const CACHE_FILE = path.join(env.PRIVATE_DIR, 'live_cache.json');
+const cache = new Map(); // topic -> { content, sourceUrl, lastChecked, closureNoted, expiresAt }
+
+function loadCacheFromDisk() {
+    try {
+        if (!fs.existsSync(CACHE_FILE)) return;
+        const data = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
+        for (const [topic, entry] of Object.entries(data)) {
+            if (entry && typeof entry.content === 'string') cache.set(topic, entry);
+        }
+    } catch (error) {
+        console.warn('Could not load live-info cache from disk:', error.message);
+    }
+}
+
+function persistCacheToDisk() {
+    try {
+        env.ensurePrivateDir();
+        const obj = Object.fromEntries(cache.entries());
+        fs.writeFileSync(CACHE_FILE, JSON.stringify(obj));
+    } catch (error) {
+        console.warn('Could not persist live-info cache to disk:', error.message);
+    }
+}
+
+loadCacheFromDisk();
 
 function detectTopic(message) {
     if (/esport|valorant|league of legends|overwatch|rocket league|gaming pc|arena zone|tournament/i.test(message)) {
@@ -29,7 +63,7 @@ function extractText(html) {
     // removing it would delete almost everything, including hours/pricing/closures.
     $('script, style, nav, footer, svg, noscript, iframe').remove();
     const text = $('body').text();
-    return text.replace(/\s+/g, ' ').trim().slice(0, 6000);
+    return text.replace(/\s+/g, ' ').trim().slice(0, MAX_CONTENT_CHARS);
 }
 
 async function fetchLiveInfo(topic) {
@@ -69,11 +103,18 @@ async function fetchLiveInfo(topic) {
             expiresAt: Date.now() + env.LIVE_CACHE_TTL_MINUTES * 60 * 1000,
         };
         cache.set(topic, result);
+        persistCacheToDisk();
         return result;
     } catch (error) {
         console.error(`Live info fetch error (${topic}):`, error.message);
+        // Serve a stale-but-usable cached copy if we have one rather than nothing — a slightly
+        // old hours/pricing snapshot beats a dead end when union.ufl.edu is briefly unreachable.
+        const stale = cache.get(topic);
+        if (stale && stale.content) {
+            return { ...stale, stale: true };
+        }
         return { content: '', sourceUrl, lastChecked: null, closureNoted: false, error: true };
     }
 }
 
-module.exports = { fetchLiveInfo, detectTopic, ALLOWLIST };
+module.exports = { fetchLiveInfo, detectTopic, extractText, ALLOWLIST, MAX_CONTENT_CHARS };
