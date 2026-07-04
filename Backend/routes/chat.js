@@ -221,7 +221,13 @@ router.post('/', chatLimiter, async (req, res) => {
         return res.status(503).json({ response: NOT_CONFIGURED_MESSAGE });
     }
 
-    const userMessage = String((req.body || {}).message || '').trim();
+    // Require an actual string. Previously we String()-coerced whatever came in, which turned a
+    // number/object/array body into garbage like "[object Object]" and forwarded it to the model.
+    const rawMessage = (req.body || {}).message;
+    if (typeof rawMessage !== 'string') {
+        return res.status(400).json({ error: 'message is required' });
+    }
+    const userMessage = rawMessage.trim();
     if (!userMessage) {
         return res.status(400).json({ error: 'message is required' });
     }
