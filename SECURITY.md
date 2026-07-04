@@ -57,6 +57,14 @@
   rate-limited to cap Navigator cost and abuse.
 - Admin content APIs (`/api/admin/*` — manual edit, re-ingest, question/feedback logs) are all
   gated by `requireTier('admin')`.
+- The router's "unsupported → refuse" is confirmed in code before refusing (`resolveIntent`):
+  only genuine credential grabs or off-topic/injection/code-gen requests hard-refuse, so the LLM
+  router mislabeling a legit question no longer wrongly refuses it — while credential/injection
+  attempts still never reach the model. Verified against adversarial eval + probe cases
+  (Spanish injection, "developer mode", social-engineering, split-across-turns, role-claim).
+- Input validation: a non-string `message` body is rejected with 400 (no `String()`-coercion of
+  objects/arrays into model input); message length is capped; malformed/oversized bodies return
+  clean 4xx. Covered by `test/edgecases.test.js`.
 - Session cookies are `httpOnly` and `sameSite: lax`. Set `SESSION_COOKIE_SECURE=true` once
   this is deployed behind HTTPS.
 

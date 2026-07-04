@@ -31,7 +31,9 @@ A later enhancement pass (M8) built on that base: multi-turn conversation memory
 admin self-improvement surface (edit manual / re-ingest / view question logs), analytics and
 feedback logging, chat rate-limiting, and a 50-question evaluation harness. A break-and-fix
 loop over that harness took answer quality from 43/50 to a stable 50/50 (two consecutive
-runs), with the automated unit suite growing to 91 tests. See M8 and Section 9/10.
+runs), with the automated unit suite growing to 127 tests. A later robustness pass (M9) added
+same-day closure handling, source-combination, router-reliability hardening, and a hostile-input
+stress suite. See M8/M9 and Section 9/10.
 
 ---
 
@@ -108,6 +110,7 @@ Full diagrams (system context, request sequence, ingestion pipeline) are in
 | M6 | Real manual integration | Sanitizer hardening (email/`pw`/account-number patterns), heading-detection fix, hand-curated `manual_clean.txt` from the real source PDF, full re-ingestion, live-info time-awareness fix |
 | M7 | Automated regression suite + persistent sessions | `Backend/test/` (`node:test`/`supertest` tests covering sanitizer, output guard, ingestion parsing, tier middleware, auth flow, chat input validation), `scripts/ingest.js` refactored to export its pure functions for testing, `session-file-store` replacing `express-session`'s in-memory default |
 | M8 | Enhancement pass (post-handoff) | Conversation memory (session-backed) + combined classify/rewrite router; hybrid vector+BM25 retrieval (`services/keywordIndex.js`) with RRF fusion, chunk overlap, trimmed citations, live+manual blending; real supervisor tier (`[SUPERVISOR]` content, login) making access four-level; admin content/log APIs (`routes/admin.js`) + `frontend/admin-content.html`; analytics/feedback logging (`services/analyticsStore.js`); `/api/chat` rate-limiting + tiered output guard; disk-durable live cache; 50-question eval harness (`Backend/eval/`, `scripts/eval.js`). Unit suite grew to 91 tests; eval bar reached a stable 50/50 |
+| M9 | Robustness pass (live-bug + stress driven) | Same-day closure/holiday guard (`liveInfo.closureAlertForToday` + prompt rules; fixes a confidently-wrong "we're open" on a closure day); structured sources returned to the client and rendered as a hover badge instead of a long footer; bidirectional live+manual combination (manual answers enriched with current data, incl. the phone number the sanitizer redacts from the manual); router reliability hardening (`resolveIntent` confirm-bad-before-refuse + few-shot examples, so the LLM router no longer hard-refuses legit questions it mislabels); stronger clock anchoring; non-string `message` rejected with 400 (found by the new stress suite). Added `test/edgecases.test.js` (33 hostile/degenerate cases) and `scripts/complex-probe.js`; unit suite now 127 tests, eval stable 50/50 |
 
 M3 was pulled ahead of M2 mid-project after user testing surfaced hallucinated live-data
 answers — the fix (real tool grounding) was prioritized over sequencing purity. M6 happened
@@ -250,7 +253,8 @@ Full detail in [`SECURITY.md`](../SECURITY.md). Highlights relevant to a handoff
   defect 13) — a manual using a different heading style will need explicit `[PUBLIC]`/
   `[STAFF]`/`[SUPERVISOR]` markers added by hand, or it will fall into one large `General`
   section.
-- The automated regression suite (`Backend/test/`, now 91 tests) covers deterministic
+- The automated regression suite (`Backend/test/`, now 127 tests, incl. a hostile-input
+  `edgecases.test.js`) covers deterministic
   application logic. The LLM-answer-quality evaluation set now also exists (M8,
   `Backend/eval/`, `npm run eval`, 50 graded questions) and currently passes 50/50 — but it
   runs against a live server with real, non-deterministic model calls, so treat it as a

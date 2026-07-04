@@ -253,7 +253,7 @@ same hours/pricing/closures text a browser would) — no headless browser is use
 - `npm start` — run the app (`PORT` from `.env`, default 3000).
 - `npm run ingest` — rebuild the manual's vector store after editing
   `Backend/private/manual_clean.txt` (or use the admin UI's re-ingest).
-- `npm test` — run the offline suite (`node --test --test-concurrency=1 test/`, ~91 tests):
+- `npm test` — run the offline suite (`node --test --test-concurrency=1 test/`, ~127 tests, incl. a hostile-input `edgecases.test.js`):
   unit tests for the sanitizer, tiered output guard, hybrid manual search/retrieval, the BM25
   keyword index, live-info extraction, the router's classify+rewrite parsing, manual-ingestion
   parsing/overlap, and tier middleware, plus `supertest`-driven integration tests for auth,

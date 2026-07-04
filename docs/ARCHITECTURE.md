@@ -137,12 +137,14 @@ sequenceDiagram
     R->>N: 1 chat completion (temp 0) → JSON
     N-->>R: { intent, standalone_query }
     R-->>C: intent + standalone query (pronouns/ellipsis resolved)
+    C->>C: resolveIntent — confirm 'unsupported' in code (SECRET/OFFTOPIC) before refusing
 
     alt intent == live
         C->>L: fetchLiveInfo(topic) + searchManual(standaloneQuery, role) in parallel
         L->>L: cache hit (memory→disk)? return cached
         L->>N: (cache miss) fetch union.ufl.edu page (≤15k chars)
         L-->>C: live content (+ manual passages BLENDED as supplement)
+        C->>C: closureAlertForToday — inject hard CLOSURE ALERT if today is in a closure notice
     else intent == manual
         C->>M: searchManual(standaloneQuery, role)  [HYBRID]
         M->>N: embed(sub-queries)
@@ -163,9 +165,9 @@ sequenceDiagram
     else clean / inline-redacted
         G-->>C: reply (verbatim or with spans masked)
     end
-    C->>C: append citation footer (top ≤2 sections; skipped for canned refusals)
+    C->>C: build STRUCTURED sources (manual and/or live; top ≤2 sections; none for canned refusals)
     C->>C: recordTurn(history) + analyticsStore.logQuestion(answered?)
-    C-->>U: { response }
+    C-->>U: { response, sources }   %% UI renders sources as a hover ⓘ badge, not a text footer
 ```
 
 ---
@@ -256,3 +258,15 @@ grounded manual attempt), never to a wrongful refusal.
   inline-redact) with Luhn-gated card detection.
 - **Evaluation harness** — `npm run eval` drives `Backend/eval/questions.js` (50 graded
   questions incl. adversarial/tier-boundary cases) against a live server. Current bar: 50/50.
+
+Robustness pass (M9):
+- **Same-day closure guard** — `liveInfo.closureAlertForToday` + prompt rules make the bot fail
+  safe on holidays/closures instead of confidently saying "open" (fixed a real July-4 live bug).
+- **Router reliability** — `resolveIntent` confirms an `unsupported` classification in code
+  before hard-refusing, so the LLM router no longer wrongly refuses legit questions it mislabels;
+  few-shot examples further stabilize it.
+- **Structured sources + hover badge** — responses return `{ response, sources }`; the UI shows a
+  compact ⓘ badge. Live+manual are combined bidirectionally so answers are more precise (and
+  contact facts the sanitizer redacts from the manual are pulled from the live page).
+- **Hardened input validation + stress suite** — non-string message bodies rejected; a
+  33-case `test/edgecases.test.js` exercises hostile/degenerate inputs. Unit suite: 127 tests.
