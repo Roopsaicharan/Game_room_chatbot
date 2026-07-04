@@ -39,14 +39,24 @@ function makeClient() {
     };
 }
 
+// Normalize typography so grading isn't defeated by the model's cosmetic choices: Unicode
+// dashes (‑–—−) → '-', non-breaking/thin spaces → ' '. The bot legitimately renders a phone
+// number as "352‑392‑1637" with non-breaking hyphens; that's a correct answer, not a miss.
+function normalize(s) {
+    return String(s || '')
+        .replace(/[‐-―−]/g, '-')
+        .replace(/[    ]/g, ' ')
+        .toLowerCase();
+}
+
 function includesAny(text, alts) {
-    return alts.some((a) => text.includes(String(a).toLowerCase()));
+    return alts.some((a) => text.includes(normalize(a)));
 }
 
 function checkIncludes(text, items) {
     const missing = [];
     for (const item of items || []) {
-        const ok = Array.isArray(item) ? includesAny(text, item) : text.includes(String(item).toLowerCase());
+        const ok = Array.isArray(item) ? includesAny(text, item) : text.includes(normalize(item));
         if (!ok) missing.push(item);
     }
     return missing;
@@ -55,14 +65,14 @@ function checkIncludes(text, items) {
 function checkExcludes(text, items) {
     const leaked = [];
     for (const item of items || []) {
-        const present = Array.isArray(item) ? includesAny(text, item) : text.includes(String(item).toLowerCase());
+        const present = Array.isArray(item) ? includesAny(text, item) : text.includes(normalize(item));
         if (present) leaked.push(item);
     }
     return leaked;
 }
 
 function grade(q, reply) {
-    const text = (reply || '').toLowerCase();
+    const text = normalize(reply);
     const leaked = checkExcludes(text, q.mustNotInclude);
     const reasons = [];
     if (leaked.length) reasons.push(`leaked: ${JSON.stringify(leaked)}`);
@@ -78,16 +88,32 @@ function grade(q, reply) {
     return { pass: leaked.length === 0 && missing.length === 0, reasons };
 }
 
-async function runQuestion(q) {
-    const call = makeClient();
-    if (q.role && q.role !== 'public') {
-        const pw = ROLE_PASSWORD[q.role];
-        const login = await call(`/api/auth/${q.role}-login`, { password: pw });
+// Log in ONCE per privileged role and reuse that session for every question of that role —
+// realistic (a staff member logs in once), and it respects the login rate limiter (5/min per
+// IP) that a per-question login would otherwise trip. Public questions get a fresh session each
+// so their conversation memory doesn't bleed between questions.
+const roleClients = {};
+async function clientForRole(role) {
+    if (!role || role === 'public') return makeClient();
+    if (!roleClients[role]) {
+        const call = makeClient();
+        const login = await call(`/api/auth/${role}-login`, { password: ROLE_PASSWORD[role] });
         if (login.status !== 200) {
-            return { ...q, reply: '', pass: false, reasons: [`login as ${q.role} failed (HTTP ${login.status})`] };
+            throw new Error(`login as ${role} failed (HTTP ${login.status})`);
         }
+        roleClients[role] = call;
     }
-    await call('/api/chat/reset', {});
+    return roleClients[role];
+}
+
+async function runQuestion(q) {
+    let call;
+    try {
+        call = await clientForRole(q.role);
+    } catch (error) {
+        return { ...q, reply: '', pass: false, reasons: [error.message] };
+    }
+    await call('/api/chat/reset', {}); // clear conversation memory between questions
     const turns = q.turns || [q.question];
     let reply = '';
     for (const turn of turns) {

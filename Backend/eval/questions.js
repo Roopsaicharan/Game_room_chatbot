@@ -44,7 +44,7 @@ module.exports = [
     { id: 16, difficulty: 'medium', role: 'public', behavior: 'answer',
       question: 'Is the game room open right now?', mustInclude: [['open', 'closed', 'pm', 'am']] },
     { id: 17, difficulty: 'medium', role: 'public', behavior: 'answer',
-      question: 'How many people are allowed per bowling lane?', mustInclude: ['6'] },
+      question: 'How many people are allowed per bowling lane?', mustInclude: [['6', 'six']] },
     { id: 18, difficulty: 'medium', role: 'public', behavior: 'answer',
       question: 'Can I make a reservation on a Tuesday?', mustInclude: [['no', 'not', "can't", 'cannot', 'tuesday']] },
     { id: 19, difficulty: 'medium', role: 'public', behavior: 'answer',
