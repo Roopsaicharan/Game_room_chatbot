@@ -112,6 +112,13 @@ async function buildToolContext(intent, message, role) {
 
         if (result.content) {
             let block = `LIVE_INFO (from ${result.sourceUrl}, fetched ${result.lastChecked}):\n${result.content}${result.closureNoted ? '\n[Note: the word "closed" appears on this page — check whether a reason is given before stating one.]' : ''}`;
+            // Hard, code-level guard against the worst failure mode: asserting "open" on a day the
+            // page flags as a closure/holiday. If today's date sits inside a closure notice, tell
+            // the model in no uncertain terms not to override it with the weekly hours.
+            const alert = liveInfo.closureAlertForToday(result.content);
+            if (alert) {
+                block += `\n\n[CLOSURE ALERT — the live page's closure/holiday notice references TODAY (${alert.date}). The regular weekly hours do NOT override this. Read the notice ("${alert.snippet}"): if it means we are closed or closing early today, state that plainly. If it is at all ambiguous, tell the user we may be closed or on reduced holiday hours today and to call 352-392-1637 to confirm. Do NOT confidently claim we are open over a closure notice for today.]`;
+            }
             if (manualPassages.length > 0) {
                 block += `\n\nSUPPLEMENTARY_MANUAL_CONTEXT (from the reference manual — use for policies/details the live page above doesn't cover; the live page remains authoritative for hours, pricing, and closures):\n${formatPassages(manualPassages)}`;
             }

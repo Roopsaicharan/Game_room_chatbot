@@ -66,6 +66,30 @@ function extractText(html) {
     return text.replace(/\s+/g, ' ').trim().slice(0, MAX_CONTENT_CHARS);
 }
 
+const CLOSURE_KEYWORDS = /clos(?:e|ed|ing|ure)|holiday|independence day|thanksgiving|christmas|new year|labor day|memorial day|spring break|winter break/i;
+
+// Deterministic guard for the most dangerous live-info failure: confidently telling a visitor
+// "we're open" on a day the page actually flags as a closure/holiday. If the CURRENT date (in
+// ET) appears within a closure/holiday notice on the page, we return an alert the route injects
+// into the model's context so the regular weekly hours can't silently override a same-day
+// closure. Computed at read time (not cached) because "today" changes daily. `now` is injectable
+// for testing.
+function closureAlertForToday(content, now = new Date()) {
+    if (!content) return null;
+    const monthDay = now.toLocaleDateString('en-US', { timeZone: 'America/New_York', month: 'long', day: 'numeric' });
+    const [mon, day] = monthDay.split(' ');
+    const dateRe = new RegExp(`\\b${mon}\\s+${day}(?:st|nd|rd|th)?\\b`, 'i');
+    const re = new RegExp(CLOSURE_KEYWORDS.source, 'gi');
+    let m;
+    while ((m = re.exec(content)) !== null) {
+        const win = content.slice(Math.max(0, m.index - 180), m.index + 180);
+        if (dateRe.test(win)) {
+            return { date: monthDay, snippet: win.replace(/\s+/g, ' ').trim() };
+        }
+    }
+    return null;
+}
+
 async function fetchLiveInfo(topic) {
     const sourceUrl = ALLOWLIST[topic];
     if (!sourceUrl) {
@@ -117,4 +141,4 @@ async function fetchLiveInfo(topic) {
     }
 }
 
-module.exports = { fetchLiveInfo, detectTopic, extractText, ALLOWLIST, MAX_CONTENT_CHARS };
+module.exports = { fetchLiveInfo, detectTopic, extractText, closureAlertForToday, ALLOWLIST, MAX_CONTENT_CHARS };
