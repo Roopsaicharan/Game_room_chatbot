@@ -31,4 +31,23 @@ async function resetCollection() {
     return getOrCreateCollection();
 }
 
-module.exports = { getClient, getOrCreateCollection, resetCollection };
+// Pulls every chunk (text + access_level) out of the collection so the in-process BM25 index
+// can be built. Fine at this manual's ~50-chunk scale; revisit if the corpus grows large.
+// Routes through `api.getOrCreateCollection` (not the bare function) so a test that stubs the
+// collection also intercepts this path.
+async function getAllRecords() {
+    const collection = await api.getOrCreateCollection();
+    const result = await collection.get({ include: ['documents', 'metadatas'] });
+    const ids = result.ids || [];
+    const documents = result.documents || [];
+    const metadatas = result.metadatas || [];
+    return ids.map((id, i) => ({
+        id,
+        text: documents[i] || '',
+        section: (metadatas[i] && metadatas[i].section) || 'Manual',
+        accessLevel: (metadatas[i] && metadatas[i].access_level) || 'staff',
+    }));
+}
+
+const api = { getClient, getOrCreateCollection, resetCollection, getAllRecords };
+module.exports = api;

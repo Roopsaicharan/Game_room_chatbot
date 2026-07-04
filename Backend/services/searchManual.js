@@ -1,5 +1,6 @@
 const chromaClient = require('./chromaClient');
 const navigator = require('../lib/navigatorClient');
+const keywordIndex = require('./keywordIndex');
 const env = require('../config/env');
 
 // Was 5 — too narrow. A real query ("Where can I contact the game room supervisor?")
@@ -11,6 +12,32 @@ const env = require('../config/env');
 // a genuinely relevant chunk. The relevance threshold below is still the real relevance
 // gate; this is just how many candidates are allowed to compete against it.
 const N_RESULTS = 8;
+
+// Reciprocal Rank Fusion constant. The standard k=60 damps how much the very top ranks
+// dominate, so a strong lexical-only hit can still surface alongside strong vector hits.
+const RRF_K = 60;
+
+// The BM25 index is derived from the same chunks Chroma holds. Cache it with a short TTL so we
+// don't re-pull the whole corpus on every query, but still pick up a re-ingest within minutes.
+// refreshKeywordIndex() forces an immediate rebuild (used by the admin re-ingest endpoint).
+const KEYWORD_INDEX_TTL_MS = 5 * 60 * 1000;
+let cachedIndex = null;
+let cachedAt = 0;
+
+async function getKeywordIndex() {
+    if (cachedIndex && Date.now() - cachedAt < KEYWORD_INDEX_TTL_MS) {
+        return cachedIndex;
+    }
+    const records = await chromaClient.getAllRecords();
+    cachedIndex = keywordIndex.buildIndex(records);
+    cachedAt = Date.now();
+    return cachedIndex;
+}
+
+function refreshKeywordIndex() {
+    cachedIndex = null;
+    cachedAt = 0;
+}
 
 function allowedLevelsForRole(role) {
     return role === 'public' ? ['public'] : ['public', 'staff'];
@@ -35,13 +62,11 @@ function splitSubQueries(message) {
     return parts.length > 1 ? parts : [message];
 }
 
-// Role is re-enforced here regardless of what the `where` filter already did — the prompt
-// (and even the DB filter) is not the security boundary; this function is.
-async function searchManual(query, role) {
+// Vector (semantic) retrieval. Returns a Map text -> { section, text, similarity }, best score
+// per chunk across all sub-queries, already role-filtered and threshold-gated.
+async function vectorCandidates(subQueries, role) {
     const collection = await chromaClient.getOrCreateCollection();
-    const subQueries = splitSubQueries(query);
     const queryEmbeddings = await Promise.all(subQueries.map((q) => navigator.embed(q)));
-
     const result = await collection.query({
         queryEmbeddings,
         nResults: N_RESULTS,
@@ -50,32 +75,73 @@ async function searchManual(query, role) {
 
     const allowedLevels = allowedLevelsForRole(role);
     const bestByText = new Map();
-
     const numQueries = result.documents?.length || 0;
     for (let q = 0; q < numQueries; q++) {
         const documents = result.documents[q] || [];
         const metadatas = result.metadatas?.[q] || [];
         const distances = result.distances?.[q] || [];
-
         for (let i = 0; i < documents.length; i++) {
             const metadata = metadatas[i] || {};
             if (!allowedLevels.includes(metadata.access_level)) continue; // defensive re-check
-
             const distance = distances[i] ?? 2;
-            const similarity = 1 - distance / 2; // cosine distance in Chroma ranges 0 (identical)..2 (opposite)
+            const similarity = 1 - distance / 2; // cosine distance in Chroma ranges 0..2
             if (similarity < env.RELEVANCE_THRESHOLD) continue;
-
-            // The same chunk can surface for more than one sub-query — keep its best score.
             const existing = bestByText.get(documents[i]);
-            if (!existing || similarity > existing.score) {
-                bestByText.set(documents[i], { section: metadata.section || 'Manual', text: documents[i], score: similarity });
+            if (!existing || similarity > existing.similarity) {
+                bestByText.set(documents[i], { section: metadata.section || 'Manual', text: documents[i], similarity });
             }
         }
     }
+    return bestByText;
+}
 
-    const passages = [...bestByText.values()].sort((a, b) => b.score - a.score).slice(0, N_RESULTS);
+// Lexical (BM25) retrieval over the same corpus. Best-effort: if the corpus can't be loaded
+// (e.g. Chroma unreachable, or a unit test stub without a `get` method), we return nothing and
+// the search degrades cleanly to vector-only. The role filter is applied here too, and every
+// returned chunk is defensively re-checked before it's used.
+async function keywordCandidates(query, role) {
+    const allowedLevels = allowedLevelsForRole(role);
+    try {
+        const index = await getKeywordIndex();
+        const hits = keywordIndex.search(index, query, allowedLevels, N_RESULTS);
+        return hits.filter((h) => allowedLevels.includes(h.accessLevel)); // defensive re-check
+    } catch (error) {
+        console.error('Keyword search unavailable, falling back to vector-only:', error.message);
+        return [];
+    }
+}
 
+// Hybrid retrieval: fuse the semantic and lexical rankings with Reciprocal Rank Fusion. A chunk
+// that ranks well in either list surfaces; one that ranks well in both is boosted. This catches
+// exact-term questions (acronyms, codes, specific game names) that pure vector search blurs,
+// without letting lexical noise dominate. Role is re-enforced on both paths — the prompt and the
+// DB filter are defense-in-depth, this function is the boundary.
+async function searchManual(query, role) {
+    const subQueries = splitSubQueries(query);
+    const [vectorMap, keywordHits] = await Promise.all([
+        vectorCandidates(subQueries, role),
+        keywordCandidates(query, role),
+    ]);
+
+    const vectorRanked = [...vectorMap.values()].sort((a, b) => b.similarity - a.similarity);
+
+    // Fuse by text. RRF score sums 1/(k + rank) across whichever lists the chunk appears in.
+    const fused = new Map(); // text -> { section, text, score }
+    vectorRanked.forEach((cand, rank) => {
+        fused.set(cand.text, { section: cand.section, text: cand.text, score: 1 / (RRF_K + rank) });
+    });
+    keywordHits.forEach((cand, rank) => {
+        const rrf = 1 / (RRF_K + rank);
+        const existing = fused.get(cand.text);
+        if (existing) {
+            existing.score += rrf;
+        } else {
+            fused.set(cand.text, { section: cand.section || 'Manual', text: cand.text, score: rrf });
+        }
+    });
+
+    const passages = [...fused.values()].sort((a, b) => b.score - a.score).slice(0, N_RESULTS);
     return { passages, usedFallback: passages.length === 0 };
 }
 
-module.exports = { searchManual, splitSubQueries };
+module.exports = { searchManual, splitSubQueries, refreshKeywordIndex };

@@ -6,6 +6,7 @@ const sanitizer = require('../services/sanitizer');
 const chromaClient = require('../services/chromaClient');
 
 const MAX_CHUNK_CHARS = 800;
+const OVERLAP_CHARS = 120; // ~15% overlap so a fact split across a chunk boundary isn't lost
 
 const PUBLIC_KEYWORDS = [
     'hours', 'hour', 'pricing', 'price', 'cost', 'rate', 'location', 'general information',
@@ -117,6 +118,25 @@ function chunkParagraphs(paragraphs, maxLen = MAX_CHUNK_CHARS) {
     return chunks;
 }
 
+// Adds a short overlap: each chunk after the first is prefixed with the tail of the previous
+// one (snapped to a word boundary). A fact that lands right on a chunk boundary — a price and
+// the condition attached to it, say — then appears whole in at least one chunk instead of being
+// split and lost to retrieval. Applied AFTER chunkParagraphs so that function keeps its clean
+// "every base chunk is within maxLen" contract; overlap is a deliberate, separate transform.
+// Overlap stays within a single section's chunks, so it never bleeds across an access boundary.
+function addOverlap(chunks, overlapChars = OVERLAP_CHARS) {
+    if (overlapChars <= 0 || chunks.length < 2) return chunks.slice();
+    return chunks.map((chunk, i) => {
+        if (i === 0) return chunk;
+        const prev = chunks[i - 1];
+        let tail = prev.slice(Math.max(0, prev.length - overlapChars));
+        const spaceIdx = tail.indexOf(' ');
+        if (spaceIdx > 0) tail = tail.slice(spaceIdx + 1); // start at a word boundary
+        tail = tail.trim();
+        return tail ? `${tail} ${chunk}` : chunk;
+    });
+}
+
 function slugify(title) {
     return title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'section';
 }
@@ -142,7 +162,7 @@ async function main() {
     for (const section of sections) {
         const accessLevel = detectAccessLevel(section);
         const paragraphs = splitIntoParagraphs(section.bodyLines);
-        const chunks = chunkParagraphs(paragraphs);
+        const chunks = addOverlap(chunkParagraphs(paragraphs));
         const slug = slugify(section.title);
         chunks.forEach((chunkText, i) => {
             records.push({
@@ -205,5 +225,6 @@ module.exports = {
     detectAccessLevel,
     splitIntoParagraphs,
     chunkParagraphs,
+    addOverlap,
     slugify,
 };

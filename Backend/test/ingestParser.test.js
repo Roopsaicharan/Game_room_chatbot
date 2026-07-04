@@ -6,6 +6,7 @@ const {
     parseSections,
     detectAccessLevel,
     chunkParagraphs,
+    addOverlap,
     slugify,
 } = require('../scripts/ingest');
 
@@ -90,6 +91,20 @@ test('chunkParagraphs merges short paragraphs instead of over-fragmenting', () =
     const chunks = chunkParagraphs(['Short one.', 'Short two.'], 800);
     assert.equal(chunks.length, 1);
     assert.match(chunks[0], /Short one\.[\s\S]*Short two\./);
+});
+
+test('addOverlap prefixes each chunk after the first with the tail of the previous chunk', () => {
+    const base = ['First chunk ends with alpha beta gamma delta.', 'Second chunk starts here.'];
+    const overlapped = addOverlap(base, 20);
+    assert.equal(overlapped[0], base[0], 'first chunk is unchanged');
+    assert.ok(overlapped[1].endsWith('Second chunk starts here.'), 'original chunk text is preserved');
+    assert.ok(overlapped[1].length > base[1].length, 'overlap text was prepended');
+    assert.ok(/gamma|delta/.test(overlapped[1]), 'the prepended text comes from the end of the previous chunk');
+});
+
+test('addOverlap is a no-op for a single chunk or zero overlap', () => {
+    assert.deepEqual(addOverlap(['only one chunk'], 120), ['only one chunk']);
+    assert.deepEqual(addOverlap(['a', 'b'], 0), ['a', 'b']);
 });
 
 test('slugify produces a safe, bounded id fragment', () => {

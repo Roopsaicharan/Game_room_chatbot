@@ -66,32 +66,64 @@ function formatLastChecked(iso) {
     });
 }
 
+function formatPassages(passages) {
+    return passages.map((p) => `[Section: ${p.section}]\n${p.text}`).join('\n\n');
+}
+
+// Passages come back ranked by fused relevance, so the first distinct sections are the ones the
+// answer most likely drew on. Cite only the top couple instead of every section that happened to
+// be retrieved — a footer listing six sections for a one-line answer reads as noise and erodes
+// trust in the citation.
+const MAX_CITED_SECTIONS = 2;
+function topSections(passages, max = MAX_CITED_SECTIONS) {
+    const seen = [];
+    for (const p of passages) {
+        if (!seen.includes(p.section)) seen.push(p.section);
+        if (seen.length >= max) break;
+    }
+    return seen;
+}
+
+// Best-effort manual retrieval that never throws — used where a manual result is supplementary
+// (a live-intent turn) and a retrieval error shouldn't sink the whole response.
+async function safeSearchManual(message, role) {
+    if (!env.hasManual()) return [];
+    try {
+        const { passages } = await searchManual(message, role);
+        return passages;
+    } catch (error) {
+        console.error('Manual search error:', error.message);
+        return [];
+    }
+}
+
 async function buildToolContext(intent, message, role) {
     if (intent === 'live') {
         const topic = liveInfo.detectTopic(message);
-        const result = await liveInfo.fetchLiveInfo(topic);
+        // Fetch live + manual in parallel and BLEND them: the live page is authoritative for
+        // volatile facts (hours, pricing, closures), while the manual covers policies/details
+        // the page omits. A compound question ("what's free and what are the reservation rules")
+        // needs both. If live fails, the manual carries the turn as a labeled fallback.
+        const [result, manualPassages] = await Promise.all([
+            liveInfo.fetchLiveInfo(topic),
+            safeSearchManual(message, role),
+        ]);
+
         if (result.content) {
-            const citation = { type: 'live', sourceUrl: result.sourceUrl, lastChecked: result.lastChecked };
-            const block = `LIVE_INFO (from ${result.sourceUrl}, fetched ${result.lastChecked}):\n${result.content}${result.closureNoted ? '\n[Note: the word "closed" appears on this page — check whether a reason is given before stating one.]' : ''}`;
-            return { block, citation };
+            let block = `LIVE_INFO (from ${result.sourceUrl}, fetched ${result.lastChecked}):\n${result.content}${result.closureNoted ? '\n[Note: the word "closed" appears on this page — check whether a reason is given before stating one.]' : ''}`;
+            if (manualPassages.length > 0) {
+                block += `\n\nSUPPLEMENTARY_MANUAL_CONTEXT (from the reference manual — use for policies/details the live page above doesn't cover; the live page remains authoritative for hours, pricing, and closures):\n${formatPassages(manualPassages)}`;
+            }
+            return { block, citation: { type: 'live', sourceUrl: result.sourceUrl, lastChecked: result.lastChecked } };
         }
 
         // The live page couldn't be reached (down, blocked, or redesigned — see the tripwire
         // in liveInfo.js). Rather than dead-ending, fall back to the manual's own general info
-        // (hours, specials, reservation policies) — it's a secondary source, so it's labeled
-        // as such and the model is told to hedge accordingly (a manual value can be stale in a
-        // way a successful live fetch isn't).
-        if (env.hasManual()) {
-            try {
-                const { passages } = await searchManual(message, role);
-                if (passages.length > 0) {
-                    const block = `LIVE_INFO: (none — the live page could not be reached)\nFALLBACK_MANUAL_CONTEXT (from the reference manual, not live-verified — may be outdated):\n${passages.map((p) => `[Section: ${p.section}]\n${p.text}`).join('\n\n')}`;
-                    const sections = [...new Set(passages.map((p) => p.section))];
-                    return { block, citation: { type: 'manual', sections } };
-                }
-            } catch (error) {
-                console.error('Manual fallback search error:', error.message);
-            }
+        // (hours, specials, reservation policies) — labeled as a secondary source so the model
+        // hedges on currency (a manual value can be stale in a way a live fetch isn't).
+        if (manualPassages.length > 0) {
+            const block = `LIVE_INFO: (none — the live page could not be reached)\nFALLBACK_MANUAL_CONTEXT (from the reference manual, not live-verified — may be outdated):\n${formatPassages(manualPassages)}`;
+            return { block, citation: { type: 'manual', sections: topSections(manualPassages) } };
         }
 
         return { block: 'LIVE_INFO: (none — the live page could not be reached, and no matching manual passage was found either)', citation: null };
@@ -111,9 +143,8 @@ async function buildToolContext(intent, message, role) {
         if (passages.length === 0) {
             return { block: 'RETRIEVED_CONTEXT: (none — no matching passages found)', citation: null };
         }
-        const block = `RETRIEVED_CONTEXT:\n${passages.map((p) => `[Section: ${p.section}]\n${p.text}`).join('\n\n')}`;
-        const sections = [...new Set(passages.map((p) => p.section))];
-        return { block, citation: { type: 'manual', sections } };
+        const block = `RETRIEVED_CONTEXT:\n${formatPassages(passages)}`;
+        return { block, citation: { type: 'manual', sections: topSections(passages) } };
     }
 
     return { block: '', citation: null };

@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { searchManual } = require('../services/searchManual');
+const { searchManual, refreshKeywordIndex } = require('../services/searchManual');
 const chromaClient = require('../services/chromaClient');
 const navigator = require('../lib/navigatorClient');
 
@@ -109,4 +109,58 @@ test('reports usedFallback when nothing passes the relevance threshold', async (
         assert.equal(passages.length, 0);
         assert.equal(usedFallback, true);
     });
+});
+
+test('hybrid: a lexical (BM25) match surfaces even when vector search returns nothing (exact-term query the embedding missed)', async () => {
+    const originalGetCollection = chromaClient.getOrCreateCollection;
+    const originalEmbed = navigator.embed;
+    // Vector search returns nothing relevant; the corpus (via get) contains the BOGO chunk.
+    chromaClient.getOrCreateCollection = async () => ({
+        query: async () => ({ documents: [[]], metadatas: [[]], distances: [[]] }),
+        get: async () => ({
+            ids: ['specials-0', 'rules-0'],
+            documents: [
+                'BOGO Thursday and $2 Tuesday are regular promotions.',
+                'Bowling shoes must be worn by anyone bowling over a kids size 7 shoe.',
+            ],
+            metadatas: [
+                { section: 'Specials', access_level: 'public' },
+                { section: 'Rules', access_level: 'public' },
+            ],
+        }),
+    });
+    navigator.embed = async () => [0.1, 0.2, 0.3];
+    refreshKeywordIndex(); // avoid cache bleed from other tests
+    try {
+        const { passages, usedFallback } = await searchManual('when is BOGO Thursday', 'public');
+        assert.equal(usedFallback, false);
+        assert.ok(passages.some((p) => p.text.includes('BOGO')), 'the BOGO chunk should surface via lexical fusion');
+    } finally {
+        chromaClient.getOrCreateCollection = originalGetCollection;
+        navigator.embed = originalEmbed;
+        refreshKeywordIndex();
+    }
+});
+
+test('hybrid: lexical path still respects role — a public query never surfaces a staff-only chunk by keyword', async () => {
+    const originalGetCollection = chromaClient.getOrCreateCollection;
+    const originalEmbed = navigator.embed;
+    chromaClient.getOrCreateCollection = async () => ({
+        query: async () => ({ documents: [[]], metadatas: [[]], distances: [[]] }),
+        get: async () => ({
+            ids: ['daily-0'],
+            documents: ['Connect2 is used to log in and complete task lists and rounds.'],
+            metadatas: [{ section: 'Daily Tasks', access_level: 'staff' }],
+        }),
+    });
+    navigator.embed = async () => [0.1, 0.2, 0.3];
+    refreshKeywordIndex();
+    try {
+        const { passages } = await searchManual('how do I use Connect2', 'public');
+        assert.equal(passages.length, 0, 'a staff-only chunk must not reach a public caller via the keyword path');
+    } finally {
+        chromaClient.getOrCreateCollection = originalGetCollection;
+        navigator.embed = originalEmbed;
+        refreshKeywordIndex();
+    }
 });
