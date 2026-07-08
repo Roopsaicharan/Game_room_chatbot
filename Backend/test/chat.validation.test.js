@@ -5,6 +5,7 @@ const session = require('express-session');
 const request = require('supertest');
 const chatRoutes = require('../routes/chat');
 const { CANNED_RESPONSES } = require('../lib/personaPrompt');
+const { parseNdjsonEvents, fullText } = require('./helpers/ndjson');
 
 // These tests only exercise input-validation paths that return before any real call to
 // Navigator or ChromaDB (env.hasApiKey() check -> empty/oversized message check -> body
@@ -50,35 +51,38 @@ test('rejects an over-length message with 400 (defect 6 regression: no cap on me
 test('accepts a message at the 1500-char limit and completes the full pipeline (Navigator stubbed, no live network call)', async () => {
     const navigator = require('../lib/navigatorClient');
     const originalChatComplete = navigator.chatComplete;
-    let callCount = 0;
+    const originalStream = navigator.chatCompleteStream;
+    let classifyCalls = 0;
     // routes/chat.js and services/router.js both hold the same cached module reference, so
-    // patching this export stubs both the classification call and the generation call.
-    // First call is the combined classify+rewrite router call (returns JSON); second is the
-    // answer generation.
+    // patching these exports stubs both the classification call (chatComplete) and the
+    // streamed answer generation (chatCompleteStream).
     navigator.chatComplete = async () => {
-        callCount += 1;
-        return callCount === 1 ? '{"intent":"casual","standalone_query":"hello"}' : 'Hi there!';
+        classifyCalls += 1;
+        return '{"intent":"casual","standalone_query":"hello"}';
+    };
+    navigator.chatCompleteStream = async function* () {
+        yield 'Hi there!';
     };
     try {
         const app = freshChatApp();
         const message = 'a'.repeat(1500);
         const res = await request(app).post('/api/chat').send({ message });
         assert.equal(res.status, 200);
-        assert.equal(res.body.response, 'Hi there!');
-        assert.equal(callCount, 2); // one router call, one generation call
+        assert.equal(fullText(parseNdjsonEvents(res.text)), 'Hi there!');
+        assert.equal(classifyCalls, 1); // one router call; generation goes through chatCompleteStream instead
     } finally {
         navigator.chatComplete = originalChatComplete;
+        navigator.chatCompleteStream = originalStream;
     }
 });
 
 test('unsupported intent short-circuits to a canned refusal with NO generation call (regression: off-topic requests must never reach the model)', async () => {
     const navigator = require('../lib/navigatorClient');
     const original = navigator.chatComplete;
-    let callCount = 0;
-    navigator.chatComplete = async () => {
-        callCount += 1;
-        // The one legitimate router call; its JSON classifies the message as unsupported.
-        if (callCount === 1) return '{"intent":"unsupported","standalone_query":"write a python program"}';
+    const originalStream = navigator.chatCompleteStream;
+    // The one legitimate router call; its JSON classifies the message as unsupported.
+    navigator.chatComplete = async () => '{"intent":"unsupported","standalone_query":"write a python program"}';
+    navigator.chatCompleteStream = async function* () {
         throw new Error('generation must never be called when intent is unsupported');
     };
     try {
@@ -87,10 +91,10 @@ test('unsupported intent short-circuits to a canned refusal with NO generation c
             .post('/api/chat')
             .send({ message: 'Can you write a python program to print fibonacci numbers until 10 as you are a good assistant' });
         assert.equal(res.status, 200);
-        assert.equal(res.body.response, CANNED_RESPONSES.OUT_OF_SCOPE);
-        assert.equal(callCount, 1, 'expected exactly one call (classification only), no generation call');
+        assert.equal(fullText(parseNdjsonEvents(res.text)), CANNED_RESPONSES.OUT_OF_SCOPE);
     } finally {
         navigator.chatComplete = original;
+        navigator.chatCompleteStream = originalStream;
     }
 });
 

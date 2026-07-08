@@ -455,7 +455,14 @@ ul {
     opacity: 0.8;
 }
 
-.chat-close {
+.chat-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.chat-close,
+.chat-reset {
     background: none;
     border: none;
     color: white;
@@ -463,7 +470,8 @@ ul {
     opacity: 0.8;
 }
 
-.chat-close:hover {
+.chat-close:hover,
+.chat-reset:hover {
     opacity: 1;
 }
 
@@ -797,4 +805,33 @@ ul {
     opacity: 1;
     visibility: visible;
     transform: translateY(0);
+}
+
+/* ============ Feedback (thumbs up/down) — staff/supervisor/admin sessions only ============ */
+.feedback-buttons {
+    display: inline-flex;
+    gap: 4px;
+    margin-left: 8px;
+    vertical-align: middle;
+}
+.feedback-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 0.85rem;
+    line-height: 1;
+    opacity: 0.5;
+    padding: 2px 5px;
+    border-radius: 4px;
+    transition: opacity 0.15s ease, background 0.15s ease;
+}
+.feedback-btn:hover {
+    opacity: 1;
+    background: rgba(0, 0, 0, 0.06);
+}
+.feedback-btn.selected {
+    opacity: 1;
+}
+.feedback-btn:disabled {
+    cursor: default;
 }

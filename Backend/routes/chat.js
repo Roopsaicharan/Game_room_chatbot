@@ -32,10 +32,11 @@ const MAX_MESSAGE_LENGTH = 1500;
 
 // The router (an LLM) is imperfect and, even at temperature 0, occasionally dumps a legitimate
 // question into "unsupported" and would hard-refuse it. So we CONFIRM IN CODE before refusing:
-// only a message that actually looks like a credential grab or an off-topic / rule-override /
-// code-generation attempt is hard-refused. Everything else the router flagged unsupported falls
-// through to a grounded attempt (the persona prompt still refuses genuine off-topic itself).
-const SECRET_TERMS = /\b(password|passcode|passwd|pw|credential|api\s*key|access\s*code|door\s*code|alarm\s*code|admin\s*login)\b/i;
+// only an off-topic / rule-override / code-generation attempt is hard-refused pre-generation.
+// Everything else the router flagged unsupported (including credential wording on its own)
+// falls through to a grounded attempt — the sanitizer already stripped real credentials from
+// the manual at ingestion, and the persona prompt refuses to output them itself, so it's safe to
+// let the model see the question and answer whatever legitimate part it can.
 const OFFTOPIC_ATTACK = /\b(python|javascript|typescript|java|c\+\+|golang|rust|sql|code|coding|program|programming|script|algorithm|essay|poem|story|homework|recipe|joke|translate)\b|ignore (the|your|all|previous)|disregard (the|your|all|previous)|pretend (you|to be|that)|act as|you are now|roleplay|jailbreak|developer mode|system prompt|tell me everything|dump (the|everything|all)|entire manual|whole manual/i;
 // The venue's own answerable public info — used to route a rescued question to the live path
 // (which blends the manual) since contact/hours/pricing facts often live on the page.
@@ -43,9 +44,16 @@ const PUBLIC_INFO = /\b(phone|contact|address|e-?mail|hours?|pricing|price|cost|
 
 function resolveIntent(routerIntent, message) {
     if (routerIntent !== 'unsupported') return routerIntent;
-    if (SECRET_TERMS.test(message) || OFFTOPIC_ATTACK.test(message)) return 'unsupported'; // genuinely bad → refuse
+    if (OFFTOPIC_ATTACK.test(message)) return 'unsupported'; // injection/jailbreak/code-gen → refuse, never reaches the model
+    // A bare SECRET_TERMS match (the word "password"/"access code"/etc, with no injection
+    // language) no longer forces a blanket refusal on its own. A compound question like "how do
+    // I access the POS and what's the password" deserves the legitimate half answered, not a
+    // total non-answer — and the credential half is still safe to let through: the sanitizer
+    // already stripped real credential values from the manual at ingestion (they're not in
+    // retrievable context to leak), and the persona prompt's access_control rule refuses to
+    // output them even when asked directly, falling back to the RESTRICTED canned response.
     if (PUBLIC_INFO.test(message)) return 'live'; // contact/hours/offerings often live on the page (blends manual)
-    return 'manual'; // otherwise attempt a grounded answer; the model refuses if truly off-topic
+    return 'manual'; // otherwise attempt a grounded answer; the model refuses if truly off-topic or restricted
 }
 
 // Conversation memory lives in the (file-backed) session. We keep a little more than we send:
@@ -216,6 +224,103 @@ async function buildToolContext(intent, message, role) {
     return { block: '', citations: [] };
 }
 
+// --- Streaming response protocol -------------------------------------------------------
+// The client can't use EventSource for this (it only does GET, and /api/chat needs a POST
+// body), so we stream a simple newline-delimited-JSON body instead: one JSON object per line,
+// read via fetch()'s ReadableStream on the client. Event shapes:
+//   {type:'chunk', text}   — a safe-to-render slice of the answer
+//   {type:'blocked'}       — the output guard caught a credential/PII leak; client should
+//                             discard anything shown so far and display outputGuard.RESTRICTED_MESSAGE
+//   {type:'error', message}— something failed after the stream had already started (can't send
+//                             a fresh HTTP status at this point)
+//   {type:'done', sources} — generation finished cleanly; sources is the structured citation list
+function startStream(res) {
+    res.writeHead(200, {
+        // text/plain (not a custom ndjson mime type) so every HTTP client — browsers' fetch,
+        // supertest/superagent in tests, curl — reliably treats the body as text without
+        // needing to recognize an unregistered content type.
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Cache-Control': 'no-cache',
+        'X-Accel-Buffering': 'no', // hint any reverse proxy not to buffer the whole body first
+    });
+}
+function writeEvent(res, obj) {
+    res.write(JSON.stringify(obj) + '\n');
+}
+
+// Must exceed the longest realistic sensitive-pattern match span (see sensitivePatterns.js —
+// the longest bounded pattern, account_number_label, tops out around 40-50 chars including its
+// label and connector). We hold back this many characters behind the stream's leading edge
+// before ever releasing text, so a pattern that straddles two model-generated chunks (e.g.
+// "password:" arrives, then the value a moment later) is always fully visible to the guard
+// BEFORE the "password:" prefix is ever sent to the client — never after.
+const STREAM_HOLDBACK_CHARS = 80;
+
+// Streams one generation call to the client, guarding incrementally instead of waiting for the
+// full text. Two tiers, handled differently for a deliberate reason:
+//   - BLOCK-tier: hasBlockingContent() re-scans the ENTIRE accumulated raw text on every delta
+//     (cheap — replies are a few hundred chars), so a match assembled across chunk boundaries is
+//     always caught. Nothing within STREAM_HOLDBACK_CHARS of the leading edge is ever released,
+//     so text that's about to become part of a block match can't leak before the block fires.
+//   - REDACT-tier: released text is NEVER redacted incrementally. Redacting a truncated prefix
+//     can produce a false "complete" match (e.g. a \d{5,} run that looked finished at 5 digits
+//     but had more digits arrive a moment later) whose later, correct redaction wouldn't line up
+//     with what was already sent — a real bug caught by test/chatStreaming.test.js. Instead we
+//     simply never release PAST the start of an in-progress redact match (earliestRedactMatchStart),
+//     holding that tail back until the stream ends, then redact the COMPLETE raw text once with
+//     the same applyRedactions() the non-streaming guard() already uses, and flush the remainder.
+//     Cost: a reply mentioning an account/terminal number streams smoothly up to that point, then
+//     arrives as one slightly bigger final chunk instead of continuing token-by-token — a minor,
+//     rare-case smoothness trade for correctness that's trivial to reason about.
+// Returns { text, blocked, streamError } the same shape outputGuard.guard() would, so callers
+// downstream (recordTurn, analytics, citations) don't need to know generation was streamed.
+async function streamGuardedReply(res, messages) {
+    let raw = '';
+    let sentPlain = ''; // always a literal, unmodified prefix of raw — never itself redacted
+
+    try {
+        for await (const delta of navigator.chatCompleteStream(messages, { temperature: 0.3 })) {
+            raw += delta;
+            if (outputGuard.hasBlockingContent(raw)) {
+                writeEvent(res, { type: 'blocked', text: outputGuard.RESTRICTED_MESSAGE });
+                return { text: outputGuard.RESTRICTED_MESSAGE, blocked: true };
+            }
+            const safeLen = Math.max(0, raw.length - STREAM_HOLDBACK_CHARS);
+            const redactStart = outputGuard.earliestRedactMatchStart(raw);
+            const cut = redactStart === null ? safeLen : Math.min(safeLen, redactStart);
+            if (cut > sentPlain.length) {
+                writeEvent(res, { type: 'chunk', text: raw.slice(sentPlain.length, cut) });
+                sentPlain = raw.slice(0, cut);
+            }
+        }
+    } catch (error) {
+        console.error('Generation stream error:', error.message);
+        if (!sentPlain) {
+            // Nothing shown yet — report a clean error instead of a truncated partial reply.
+            const message = 'Sorry, I ran into a problem answering that. Please try again in a moment.';
+            writeEvent(res, { type: 'error', message });
+            return { text: message, blocked: false, streamError: true };
+        }
+        // Some text already reached the client; stop here rather than claim it's complete.
+        return { text: sentPlain, blocked: false, streamError: true };
+    }
+
+    // Final safety re-check against the complete text (defense in depth on top of the per-delta
+    // checks above), then redact the whole thing ONCE and flush whatever's left unsent. Since
+    // sentPlain is guaranteed to contain no redact match (we never cut through or past one), it's
+    // unaffected by redaction — finalRedacted is guaranteed to start with sentPlain verbatim, so
+    // slicing at sentPlain.length is safe.
+    if (outputGuard.hasBlockingContent(raw)) {
+        writeEvent(res, { type: 'blocked', text: outputGuard.RESTRICTED_MESSAGE });
+        return { text: outputGuard.RESTRICTED_MESSAGE, blocked: true };
+    }
+    const finalRedacted = outputGuard.applyRedactions(raw);
+    if (finalRedacted.length > sentPlain.length) {
+        writeEvent(res, { type: 'chunk', text: finalRedacted.slice(sentPlain.length) });
+    }
+    return { text: finalRedacted, blocked: false };
+}
+
 router.post('/', chatLimiter, async (req, res) => {
     if (!env.hasApiKey()) {
         return res.status(503).json({ response: NOT_CONFIGURED_MESSAGE });
@@ -248,6 +353,12 @@ router.post('/', chatLimiter, async (req, res) => {
     const history = getHistory(req);
     const contextHistory = history.slice(-MAX_HISTORY_CONTEXT);
 
+    // startStream() is called lazily, right before the FIRST real event (canned refusal or
+    // first generation chunk) — not unconditionally here. That way a failure in the router call
+    // itself (before we've committed to an answer) can still return a clean res.status(500).json
+    // exactly as before, instead of being downgraded to an in-stream error event; only a failure
+    // that happens AFTER we've started writing the stream needs the in-band {type:'error'} event
+    // (see the catch block below, which checks res.headersSent to pick the right shape).
     try {
         // One call classifies intent AND rewrites the (possibly elliptical) message into a
         // standalone query using recent history, so a follow-up like "what about faculty?"
@@ -272,7 +383,10 @@ router.post('/', chatLimiter, async (req, res) => {
         if (effectiveIntent === 'unsupported') {
             recordTurn(req, userMessage, CANNED_RESPONSES.OUT_OF_SCOPE);
             analyticsStore.logQuestion({ role: userRole, intent, question: userMessage, answered: false, citationType: null });
-            return res.json({ response: CANNED_RESPONSES.OUT_OF_SCOPE });
+            startStream(res);
+            writeEvent(res, { type: 'chunk', text: CANNED_RESPONSES.OUT_OF_SCOPE });
+            writeEvent(res, { type: 'done', sources: [] });
+            return res.end();
         }
 
         const { block, citations } = await buildToolContext(effectiveIntent, standaloneQuery, userRole);
@@ -291,21 +405,33 @@ router.post('/', chatLimiter, async (req, res) => {
         }
         messages.push({ role: 'user', content: userMessage });
 
-        let reply = await navigator.chatComplete(messages, { temperature: 0.3 });
-
-        const { text: guardedReply } = outputGuard.guard(reply);
-        reply = guardedReply;
+        startStream(res);
+        const { text: reply, blocked, streamError } = await streamGuardedReply(res, messages);
 
         // Sources are returned as STRUCTURED DATA (not appended to the answer text) so the UI can
-        // render a compact hover badge instead of a long "Source: ..." footer. A canned refusal
-        // isn't grounded in the retrieved passages, so it carries no sources.
-        const sources = isCannedResponse(reply)
+        // render a compact hover badge instead of a long "Source: ..." footer. A canned refusal,
+        // a blocked reply, or a mid-stream error isn't grounded in the retrieved passages, so it
+        // carries no sources.
+        const sources = (blocked || streamError || isCannedResponse(reply))
             ? []
             : citations.map((c) => c.type === 'live'
                 ? { type: 'live', label: 'union.ufl.edu (live)', url: c.sourceUrl, lastChecked: c.lastChecked ? formatLastChecked(c.lastChecked) : null }
                 : { type: 'manual', label: 'Game Room Manual', detail: c.sections.join(', ') });
 
-        recordTurn(req, userMessage, reply);
+        // Must happen BEFORE res.end() — express-session's auto-save hook fires exactly at
+        // res.end(), so a session mutation made after that point never reaches the store. This
+        // was a real bug: conversation memory (and history-restore) silently stopped surviving
+        // a request once generation moved to a streamed response, because recordTurn used to run
+        // after the response had already ended.
+        if (!streamError) {
+            recordTurn(req, userMessage, reply);
+        }
+
+        writeEvent(res, { type: 'done', sources });
+        res.end();
+
+        if (streamError) return; // don't log a truncated/failed turn as if it completed normally
+
         // A turn "counts as answered" when it produced a grounded, non-canned reply. Refusals
         // and "no evidence" non-answers are logged as unanswered — that's the admin signal for
         // which questions the current knowledge base can't yet handle.
@@ -316,11 +442,29 @@ router.post('/', chatLimiter, async (req, res) => {
             answered: !isCannedResponse(reply),
             citationType: sources[0] ? sources[0].type : null,
         });
-        res.json({ response: reply, sources });
     } catch (error) {
         console.error('Chat error:', error.message);
-        res.status(500).json({ response: 'Sorry, I ran into a problem answering that. Please try again in a moment.' });
+        const message = 'Sorry, I ran into a problem answering that. Please try again in a moment.';
+        // If nothing's been written yet (e.g. the router call itself failed), a real HTTP 500
+        // is still possible and preferable — only fall back to the in-stream error event once
+        // we've already committed to a 200 streaming response.
+        if (res.headersSent) {
+            if (!res.writableEnded) {
+                writeEvent(res, { type: 'error', message });
+                res.end();
+            }
+        } else {
+            res.status(500).json({ response: message });
+        }
     }
+});
+
+// Returns the current session's recent conversation memory so the frontend can rehydrate the
+// visible transcript after a page refresh (the server already keeps it for router/model
+// context — this just exposes it for display). No sources: those aren't persisted in
+// req.session.history, only role/content are (see recordTurn above).
+router.get('/history', (req, res) => {
+    res.json({ history: getHistory(req) });
 });
 
 // Lets the frontend start a fresh conversation without dropping the whole session (role/login

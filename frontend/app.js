@@ -9,6 +9,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const chatFab = document.getElementById('chatFab');
     const chatPanel = document.getElementById('chatPanel');
     const chatClose = document.getElementById('chatClose');
+    const chatReset = document.getElementById('chatReset');
     const chatMessages = document.getElementById('chatMessages');
     const chatForm = document.getElementById('chatForm');
     const chatInput = document.getElementById('chatInput');
@@ -24,23 +25,34 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let isChatOpen = false;
     let hasGreeted = false;
+    // Set by refreshRoleBanner() before restoreHistory()/feedback buttons need it. Only ever
+    // read from the server session (never trusted from anything the user can edit client-side) —
+    // this is purely a UI-visibility toggle (feedback buttons for logged-in roles); the actual
+    // access control lives entirely server-side regardless of what this variable holds.
+    let currentTier = 'public';
 
     // ============ Role Banner ============
     const roleBanner = document.getElementById('roleBanner');
     const roleBannerText = document.getElementById('roleBannerText');
     const roleBannerLogout = document.getElementById('roleBannerLogout');
+    const heroChatBtn = document.getElementById('heroChatBtn');
+    const heroChatBtnDefaultText = heroChatBtn ? heroChatBtn.textContent.trim() : '';
     const ROLE_LABELS = { staff: 'Staff Mode', admin: 'Admin Mode', supervisor: 'Supervisor Mode' };
+    const HERO_BTN_LABELS = { staff: 'Chat as Staff', admin: 'Chat as Admin', supervisor: 'Chat as Supervisor' };
 
     async function refreshRoleBanner() {
-        if (!roleBanner) return;
         try {
             const res = await fetch('/api/auth/session');
             const data = await res.json();
-            if (data.tier && data.tier !== 'public') {
-                roleBannerText.textContent = `Logged in — ${ROLE_LABELS[data.tier] || data.tier}`;
+            currentTier = data.tier || 'public';
+            if (!roleBanner) return;
+            if (currentTier !== 'public') {
+                roleBannerText.textContent = `Logged in — ${ROLE_LABELS[currentTier] || currentTier}`;
                 roleBanner.classList.add('visible');
+                if (heroChatBtn) heroChatBtn.textContent = HERO_BTN_LABELS[currentTier] || heroChatBtnDefaultText;
             } else {
                 roleBanner.classList.remove('visible');
+                if (heroChatBtn) heroChatBtn.textContent = heroChatBtnDefaultText;
             }
         } catch (err) {
             // session check is non-critical — fail silently, treat as public
@@ -54,17 +66,19 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    refreshRoleBanner();
-
     // ============ Chat Widget Toggle ============
+    function addGreeting() {
+        hasGreeted = true;
+        addBotMessage("Good day! 🐊 I'm your Gator Game Room Assistant powered by the UF Navigator LLM API.<br><br>Ask me anything about policies, procedures, or operations based on the Game Room Manual!");
+    }
+
     function openChat() {
         isChatOpen = true;
         chatWidget.classList.add('open');
         chatInput.focus();
 
         if (!hasGreeted) {
-            hasGreeted = true;
-            addBotMessage("Good day! 🐊 I'm your Gator Game Room Assistant powered by the UF Navigator LLM API.<br><br>Ask me anything about policies, procedures, or operations based on the Game Room Manual!");
+            addGreeting();
         }
     }
 
@@ -83,6 +97,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
     chatFab.addEventListener('click', toggleChat);
     chatClose.addEventListener('click', closeChat);
+
+    if (chatReset) {
+        chatReset.addEventListener('click', async () => {
+            chatReset.disabled = true;
+            try {
+                await fetch('/api/chat/reset', { method: 'POST' });
+            } catch (err) {
+                // Best-effort — even if the server call fails, clearing the visible transcript
+                // below still gives the user a fresh-looking chat; worst case the server still
+                // has old history until the session naturally expires.
+            }
+            chatMessages.innerHTML = '';
+            hasGreeted = false;
+            addGreeting();
+            chatReset.disabled = false;
+            chatInput.focus();
+        });
+    }
 
     chatTriggers.forEach(btn => {
         btn.addEventListener('click', (e) => {
@@ -253,8 +285,45 @@ document.addEventListener('DOMContentLoaded', () => {
         return wrap;
     }
 
+    // Thumbs up/down, staff/supervisor/admin sessions only (currentTier !== 'public') — posts
+    // to the already-built POST /api/chat/feedback endpoint. One-shot: both buttons disable
+    // after a click rather than allowing the rating to be changed, keeping the log simple.
+    function buildFeedbackButtons(question, answer) {
+        if (currentTier === 'public') return null;
+
+        const wrap = document.createElement('span');
+        wrap.className = 'feedback-buttons';
+
+        function makeButton(rating, label, glyph) {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'feedback-btn';
+            btn.setAttribute('aria-label', label);
+            btn.textContent = glyph;
+            btn.addEventListener('click', async () => {
+                if (btn.disabled) return;
+                wrap.querySelectorAll('.feedback-btn').forEach((b) => { b.disabled = true; });
+                btn.classList.add('selected');
+                try {
+                    await fetch('/api/chat/feedback', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ rating, question, answer }),
+                    });
+                } catch (err) {
+                    // Best-effort — a failed feedback POST shouldn't disrupt the chat.
+                }
+            });
+            return btn;
+        }
+
+        wrap.appendChild(makeButton('up', 'Helpful answer', '👍'));
+        wrap.appendChild(makeButton('down', 'Unhelpful answer', '👎'));
+        return wrap;
+    }
+
     // ============ Message Rendering ============
-    function addMessage(content, type, sources) {
+    function addMessage(content, type, sources, feedbackCtx) {
         const messageDiv = document.createElement('div');
         messageDiv.classList.add('message', type);
 
@@ -266,8 +335,14 @@ document.addEventListener('DOMContentLoaded', () => {
         contentDiv.classList.add('message-content');
         contentDiv.innerHTML = content;
 
-        const badge = type === 'bot' ? buildSourceBadge(sources) : null;
-        if (badge) contentDiv.appendChild(badge);
+        if (type === 'bot') {
+            const badge = buildSourceBadge(sources);
+            if (badge) contentDiv.appendChild(badge);
+            if (feedbackCtx) {
+                const feedback = buildFeedbackButtons(feedbackCtx.question, feedbackCtx.answer);
+                if (feedback) contentDiv.appendChild(feedback);
+            }
+        }
 
         messageDiv.appendChild(avatarDiv);
         messageDiv.appendChild(contentDiv);
@@ -281,12 +356,45 @@ document.addEventListener('DOMContentLoaded', () => {
         return messageDiv;
     }
 
-    function addBotMessage(content, sources) {
-        return addMessage(content, 'bot', sources);
+    // Creates an empty bot message bubble to be filled incrementally as stream chunks arrive
+    // (see sendMessage). Kept separate from addMessage() because the text needs its own node
+    // that gets re-rendered on every chunk, without disturbing a source badge / feedback buttons
+    // appended once at the end.
+    function addStreamingBotMessage() {
+        const messageDiv = document.createElement('div');
+        messageDiv.classList.add('message', 'bot');
+
+        const avatarDiv = document.createElement('div');
+        avatarDiv.classList.add('message-avatar');
+        avatarDiv.textContent = '🐊';
+
+        const contentDiv = document.createElement('div');
+        contentDiv.classList.add('message-content');
+        const textDiv = document.createElement('div');
+        textDiv.className = 'message-text';
+        contentDiv.appendChild(textDiv);
+
+        messageDiv.appendChild(avatarDiv);
+        messageDiv.appendChild(contentDiv);
+        chatMessages.appendChild(messageDiv);
+
+        requestAnimationFrame(() => {
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        });
+
+        return { messageDiv, contentDiv, textDiv };
     }
 
+    function addBotMessage(content, sources, feedbackCtx) {
+        return addMessage(content, 'bot', sources, feedbackCtx);
+    }
+
+    // Escaped here (not passed raw into addMessage's innerHTML) — this is a fix for a real gap:
+    // user-typed text used to go straight into innerHTML unescaped, so typing e.g. an <img
+    // onerror=...> tag would execute it in the sender's own browser. Bot text never had this
+    // problem (renderBotText already escapes first), only the user bubble did.
     function addUserMessage(content) {
-        return addMessage(content, 'user');
+        return addMessage(escapeHtml(content), 'user');
     }
 
     function showTypingIndicator() {
@@ -317,6 +425,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // ============ Send Message ============
+    // The server streams the answer as newline-delimited JSON events (routes/chat.js's
+    // startStream/writeEvent) instead of one JSON blob — {type:'chunk'|'blocked'|'error'|'done'}.
+    // We read the response body incrementally so the bot bubble fills in as text is generated,
+    // rather than staying blank until the whole reply is ready.
     async function sendMessage(text) {
         if (!text || !text.trim()) return;
 
@@ -325,26 +437,97 @@ document.addEventListener('DOMContentLoaded', () => {
         chatInput.value = '';
         chatSend.disabled = true;
 
-        // Show typing indicator
         showTypingIndicator();
+
+        let botEntry = null; // created lazily on the first real event, so typing dots persist
+        let rendered = '';   // accumulated safe text currently shown
+        let finalSources = [];
+        let ended = false;   // blocked or errored — no source badge/feedback on those
+
+        function ensureBotEntry() {
+            if (!botEntry) {
+                removeTypingIndicator();
+                botEntry = addStreamingBotMessage();
+            }
+            return botEntry;
+        }
+
+        function renderInto(entry, textToRender) {
+            entry.textDiv.innerHTML = renderBotText(textToRender);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
 
         try {
             const response = await fetch('/api/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ message: userText })
+                body: JSON.stringify({ message: userText }),
             });
 
-            const data = await response.json();
+            if (!response.ok) {
+                // Pre-stream validation/config failures (400/503/500) are still plain JSON.
+                let data = {};
+                try { data = await response.json(); } catch (err) { /* ignore parse failure */ }
+                removeTypingIndicator();
+                const replyText = data.response || data.error || "Sorry, I couldn't process that request.";
+                addBotMessage(renderBotText(replyText));
+                chatSend.disabled = !chatInput.value.trim();
+                chatInput.focus();
+                return;
+            }
 
-            removeTypingIndicator();
-            const replyText = data.response || data.error || "Sorry, I couldn't process that request.";
-            addBotMessage(renderBotText(replyText), data.sources);
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
 
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+
+                let newlineIndex;
+                while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
+                    const line = buffer.slice(0, newlineIndex).trim();
+                    buffer = buffer.slice(newlineIndex + 1);
+                    if (!line) continue;
+
+                    let event;
+                    try { event = JSON.parse(line); } catch (err) { continue; } // skip a malformed line rather than crash
+
+                    if (event.type === 'chunk') {
+                        rendered += event.text;
+                        renderInto(ensureBotEntry(), rendered);
+                    } else if (event.type === 'blocked') {
+                        ended = true;
+                        rendered = event.text || 'That information is restricted. Please contact your supervisor or the Game Room admin directly for it.';
+                        renderInto(ensureBotEntry(), rendered);
+                    } else if (event.type === 'error') {
+                        ended = true;
+                        rendered = event.message || 'Sorry, I ran into a problem answering that. Please try again in a moment.';
+                        renderInto(ensureBotEntry(), rendered);
+                    } else if (event.type === 'done') {
+                        finalSources = Array.isArray(event.sources) ? event.sources : [];
+                    }
+                }
+            }
+
+            const entry = ensureBotEntry(); // defensive — a stream that closed with no events at all
+            if (!rendered) {
+                rendered = "Sorry, I couldn't process that request.";
+                renderInto(entry, rendered);
+            }
+            if (!ended) {
+                const badge = buildSourceBadge(finalSources);
+                if (badge) entry.contentDiv.appendChild(badge);
+                const feedback = buildFeedbackButtons(userText, rendered);
+                if (feedback) entry.contentDiv.appendChild(feedback);
+            }
         } catch (error) {
             console.error("Chat Error:", error);
             removeTypingIndicator();
-            addBotMessage("Sorry, I'm having trouble connecting to the server. Please try again later.");
+            if (!botEntry) {
+                addBotMessage("Sorry, I'm having trouble connecting to the server. Please try again later.");
+            }
         }
 
         chatSend.disabled = !chatInput.value.trim();
@@ -510,8 +693,41 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    // ============ Restore conversation on page load ============
+    // The server already keeps recent turns in the (file-backed) session and feeds them to the
+    // router/model regardless of what's on screen — so without this, a page refresh mid-chat
+    // showed a blank widget while the bot still "remembered" the conversation underneath,
+    // which read as inconsistent. This just mirrors that server-side memory into the UI.
+    // Sources aren't restored (req.session.history only stores role/content, not citations —
+    // see routes/chat.js's recordTurn), so restored bot turns show plain text with no badge.
+    async function restoreHistory() {
+        try {
+            const res = await fetch('/api/chat/history');
+            const data = await res.json();
+            const history = Array.isArray(data.history) ? data.history : [];
+            if (history.length === 0) return;
+
+            hasGreeted = true; // don't also show the canned intro above real restored turns
+            let lastUserMessage = '';
+            for (const turn of history) {
+                if (turn.role === 'user') {
+                    lastUserMessage = turn.content;
+                    addUserMessage(turn.content);
+                } else if (turn.role === 'assistant') {
+                    addBotMessage(renderBotText(turn.content), [], { question: lastUserMessage, answer: turn.content });
+                }
+            }
+        } catch (err) {
+            // History restore is non-critical — fail silently, chat just starts fresh.
+        }
+    }
+
     // Initialize send button state
     chatSend.disabled = true;
+
+    // currentTier must be known BEFORE restoreHistory renders feedback buttons on restored
+    // bot turns, so these run in sequence rather than in parallel.
+    refreshRoleBanner().then(restoreHistory);
 
     console.log('🐊 Gator Game Room Assistant initialized!');
 });
