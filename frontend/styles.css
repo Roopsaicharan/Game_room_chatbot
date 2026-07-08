@@ -28,6 +28,10 @@
     box-sizing: border-box;
 }
 
+html {
+    font-size: 125%; /* Makes all rem-based text and layout elements slightly larger */
+}
+
 body {
     font-family: var(--font-family);
     background-color: var(--bg-white);
@@ -360,8 +364,8 @@ ul {
     position: absolute;
     bottom: 76px;
     right: 0;
-    width: 380px;
-    height: 500px;
+    width: 550px;
+    height: 750px;
     min-width: 320px;
     min-height: 400px;
     max-width: min(640px, calc(100vw - 32px));
