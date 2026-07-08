@@ -774,8 +774,13 @@ ul {
 }
 .source-tooltip {
     position: absolute;
-    bottom: 145%;
-    right: 0;
+    bottom: 145%; /* relative to the tiny icon's own height — sits just above wherever it is */
+    /* The badge is appended AFTER the rendered message text (block-level <p>/<ul> elements),
+       so it always starts a new line at the LEFT edge of the bubble, not inline after the last
+       word. Anchoring the tooltip's LEFT edge to the icon (extending rightward, into the
+       bubble's own width) keeps it on-screen; the old `right: 0` extended it LEFTWARD from an
+       icon already at the bubble's left edge, pushing it outside the chat panel entirely. */
+    left: 0;
     z-index: 20;
     min-width: 180px;
     max-width: 280px;
