@@ -77,4 +77,11 @@ app.listen(env.PORT, () => {
     if (defaultRoles.length > 0) {
         console.warn(`SECURITY: ${defaultRoles.join(' and ')} still using the default "0000" password — rotate immediately via the admin panel before real use.`);
     }
+    if (!env.hasReservationFormUrl()) {
+        console.warn('RESERVATION_FORM_URL is not configured. The reservation chat flow will collect answers but fail to submit them until it is set.');
+    } else if (env.RESERVATION_FORM_PROVIDER === 'qualtrics' && !env.RESERVATION_ALLOW_REAL_SUBMIT) {
+        console.warn('RESERVATION_FORM_PROVIDER is "qualtrics" but RESERVATION_ALLOW_REAL_SUBMIT is not "true" — reservation submissions will fill the real form but stop short of clicking Submit (dry run). Only enable this deliberately.');
+    } else if (env.RESERVATION_FORM_PROVIDER === 'qualtrics' && env.RESERVATION_ALLOW_REAL_SUBMIT) {
+        console.warn('SECURITY: RESERVATION_ALLOW_REAL_SUBMIT is "true" with the qualtrics provider — reservation submissions will be sent to the REAL UF form.');
+    }
 });

@@ -36,7 +36,6 @@
 </head>
 <body>
     <header>
-        <span>🐊</span>
         <h1>Game Room Assistant — Content Admin</h1>
         <span class="tag" id="sessionTag"></span>
     </header>
@@ -154,7 +153,7 @@
                 ['Total questions', s.totalQuestions ?? 0],
                 ['Unanswered', s.unanswered ?? 0],
                 ['Answered rate', s.answeredRate != null ? Math.round(s.answeredRate * 100) + '%' : '—'],
-                ['👍 / 👎', `${(s.feedback && s.feedback.up) || 0} / ${(s.feedback && s.feedback.down) || 0}`],
+                ['Helpful / Not helpful', `${(s.feedback && s.feedback.up) || 0} / ${(s.feedback && s.feedback.down) || 0}`],
             ].map(([l, n]) => `<div class="stat"><div class="n">${n}</div><div class="l">${l}</div></div>`).join('');
             $('intentBreakdown').textContent = s.byIntent ? 'By intent: ' + Object.entries(s.byIntent).map(([k, v]) => `${k} ${v}`).join(' · ') : '';
             renderList('unansweredList', data.unanswered);

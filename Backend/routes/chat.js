@@ -9,6 +9,9 @@ const liveInfo = require('../services/liveInfo');
 const { searchManual } = require('../services/searchManual');
 const outputGuard = require('../services/outputGuard');
 const analyticsStore = require('../services/analyticsStore');
+const reservationFlow = require('../services/reservationFlow');
+const reservationSubmitter = require('../services/reservationSubmitter');
+const reservationStore = require('../services/reservationStore');
 
 const router = express.Router();
 
@@ -41,6 +44,20 @@ const OFFTOPIC_ATTACK = /\b(python|javascript|typescript|java|c\+\+|golang|rust|
 // The venue's own answerable public info — used to route a rescued question to the live path
 // (which blends the manual) since contact/hours/pricing facts often live on the page.
 const PUBLIC_INFO = /\b(phone|contact|address|e-?mail|hours?|pricing|price|cost|rate|fee|location|located|directions|reservation|bowling|billiards?|pool table|foosball|snooker|esports|air hockey|ping.?pong|table tennis|board game|lane|offering)\b/i;
+// Narrower than PUBLIC_INFO on purpose — the reservation CTA should only fire on messages that
+// are actually about BOOKING THE VENUE, not generic equipment rental (bowling shoes, tables,
+// controllers) or other unrelated "rent"/"book" usage. A bare rent(al)?/book(ing)? was too
+// broad — a question like "do I need to rent shoes if I have my own?" isn't a reservation
+// request, but matched the old pattern. "rent"/"book" now require a venue-shaped object nearby.
+const RESERVATION_TOPIC = /\b(reservation|reserve (the|a|my)|house rental|half house|weekend rental package|book (a|the|my) (room|space|house|lane|party|event)|rent (the|a) (room|space|house)|private event)\b/i;
+// Lets a visitor opt out of the reservation CTA for the rest of the session (checked only when
+// no reservation flow is active - "cancel" is the exit word once inside the flow itself).
+const STOP_CTA_RE = /^stop$/i;
+// Used inside the reservation flow to tell "this doesn't parse as a valid answer because it's
+// actually a question" from "this doesn't parse as a valid answer because it's just wrong" - a
+// message that fails step validation AND looks question-shaped gets answered for real instead
+// of being met with a bare "sorry, I didn't catch that" (see handleReservationTurn).
+const QUESTION_LIKE_RE = /\?\s*$|^\s*(what|how|why|can|could|should|would|is|are|do|does|did|where|when|will|may|need|has|have)\b/i;
 
 function resolveIntent(routerIntent, message) {
     if (routerIntent !== 'unsupported') return routerIntent;
@@ -123,7 +140,7 @@ async function safeSearchManual(message, role) {
         return [];
     }
 }
-
+routes
 function liveCitation(result) {
     return { type: 'live', sourceUrl: result.sourceUrl, lastChecked: result.lastChecked };
 }
@@ -321,6 +338,189 @@ async function streamGuardedReply(res, messages) {
     return { text: finalRedacted, blocked: false };
 }
 
+// Runs the full manual/live/casual RAG pipeline for a message and streams the answer as chunk
+// events (calls startStream/writeEvent itself). Returns { replyText, sources, blocked,
+// streamError } - the caller still owns recordTurn + the final {type:'done'} event + res.end(),
+// so extra content can be appended before the response is finalized (the reservation CTA here,
+// or a "back to your reservation" reminder in handleReservationTurn's digression-question path
+// below). This is exactly the logic the main POST handler used to run inline; factored out so
+// both it and the reservation flow's mid-flow Q&A path share one implementation.
+async function answerAndStream(req, res, userMessage, { suppressReservationCta = false } = {}) {
+    const userRole = req.session?.tier || 'public';
+    // Include the current TIME, not just the date — "is it open right now" needs a clock
+    // reference to answer definitively; without it the model has to hedge on "right now"
+    // questions even when it has the correct hours in context.
+    const currentDateTime = new Date().toLocaleString('en-US', {
+        timeZone: 'America/New_York',
+        dateStyle: 'full',
+        timeStyle: 'short',
+    });
+    const history = getHistory(req);
+    const contextHistory = history.slice(-MAX_HISTORY_CONTEXT);
+
+    // One call classifies intent AND rewrites the (possibly elliptical) message into a
+    // standalone query using recent history, so a follow-up like "what about faculty?"
+    // retrieves against "what is the faculty price for billiards?" instead of a bare pronoun.
+    const { intent, standaloneQuery } = await router_.classifyAndRewrite(userMessage, contextHistory);
+    const effectiveIntent = resolveIntent(intent, userMessage);
+
+    // Enforced in code, not left to the model's judgment: an "unsupported" classification
+    // short-circuits straight to a canned refusal with NO generation call at all.
+    if (effectiveIntent === 'unsupported') {
+        analyticsStore.logQuestion({ role: userRole, intent, question: userMessage, answered: false, citationType: null });
+        startStream(res);
+        writeEvent(res, { type: 'chunk', text: CANNED_RESPONSES.OUT_OF_SCOPE });
+        return { replyText: CANNED_RESPONSES.OUT_OF_SCOPE, sources: [], blocked: false, streamError: false };
+    }
+
+    const { block, citations } = await buildToolContext(effectiveIntent, standaloneQuery, userRole);
+
+    const messages = [
+        { role: 'system', content: buildSystemPrompt(userRole, currentDateTime) },
+    ];
+    if (block) {
+        messages.push({ role: 'system', content: block });
+    }
+    for (const turn of contextHistory) {
+        messages.push({ role: turn.role, content: turn.content });
+    }
+    messages.push({ role: 'user', content: userMessage });
+
+    startStream(res);
+    const { text: reply, blocked, streamError } = await streamGuardedReply(res, messages);
+
+    // Sources are returned as STRUCTURED DATA (not appended to the answer text) so the UI can
+    // render a compact hover badge instead of a long "Source: ..." footer.
+    const sources = (blocked || streamError || isCannedResponse(reply))
+        ? []
+        : citations.map((c) => c.type === 'live'
+            ? { type: 'live', label: 'union.ufl.edu (live)', url: c.sourceUrl, lastChecked: c.lastChecked ? formatLastChecked(c.lastChecked) : null }
+            : { type: 'manual', label: 'Game Room Manual', detail: c.sections.join(', ') });
+
+    // Nudge toward the reservation flow after a genuinely reservation-shaped answer - never
+    // after a refusal/blocked/failed reply, never for casual small talk, and never when already
+    // mid-flow (suppressReservationCta) since offering to "start" while already inside the flow
+    // doesn't make sense. Checked against the user's own words only, NOT the router's rewritten
+    // standaloneQuery - that paraphrase can introduce trigger words the user never actually used.
+    let replyText = reply;
+    if (!suppressReservationCta && !blocked && !streamError && !isCannedResponse(reply)
+        && !req.session?.reservationCtaDismissed
+        && RESERVATION_TOPIC.test(userMessage)) {
+        const cta = "\n\nWould you like to start a reservation request?\nIf so, just type **start** in the chat box and we'll begin filling out the form together — or type **stop** if you'd rather not be asked again.";
+        replyText = reply + cta;
+        writeEvent(res, { type: 'chunk', text: cta });
+    }
+
+    if (!streamError) {
+        // A turn "counts as answered" when it produced a grounded, non-canned reply. Refusals
+        // and "no evidence" non-answers are logged as unanswered — that's the admin signal for
+        // which questions the current knowledge base can't yet handle.
+        analyticsStore.logQuestion({
+            role: userRole,
+            intent: effectiveIntent,
+            question: userMessage,
+            answered: !isCannedResponse(reply),
+            citationType: sources[0] ? sources[0].type : null,
+        });
+    }
+
+    return { replyText, sources, blocked, streamError };
+}
+
+// --- Reservation flow -------------------------------------------------------------------
+// A stateful, multi-turn mode that completely bypasses the intent router while active. Every
+// question, validation rule, and branch decision lives in services/reservationFlow.js (plain
+// code, no LLM calls anywhere in this path) - this just adapts that pure state machine onto the
+// same streaming protocol/session/analytics conventions the rest of this file already uses, so
+// the frontend needs zero changes to render it. The one exception is the mid-flow digression
+// path below, which DOES call the normal RAG pipeline (via answerAndStream) - answering a
+// genuine question is exactly the kind of judgment call that belongs behind a real retrieval +
+// generation call, not a canned string.
+async function handleReservationTurn(req, res, userMessage) {
+    const userRole = req.session?.tier || 'public';
+    try {
+        let flowState = req.session.reservationFlow || null;
+        let reply;
+        let sources = [];
+        let readyToSubmit = false;
+
+        if (!flowState) {
+            const started = reservationFlow.start();
+            flowState = started.state;
+            reply = started.reply;
+        } else {
+            const result = reservationFlow.handleAnswer(flowState, userMessage);
+
+            // A rejected answer that reads like a genuine question ("can I type a number?",
+            // "what counts as a UF Department?") gets answered for real via the normal
+            // manual/live pipeline, then the SAME pending question is re-shown as a reminder -
+            // instead of silently treating every message as a failed answer attempt. Flow state
+            // is left untouched; the visitor is still on the same step afterward.
+            if (result.invalid && QUESTION_LIKE_RE.test(userMessage.trim())) {
+                const answered = await answerAndStream(req, res, userMessage, { suppressReservationCta: true });
+                const reminder = `\n\nGetting back to your reservation request — ${result.pendingPrompt}`;
+                writeEvent(res, { type: 'chunk', text: reminder });
+                reply = answered.replyText + reminder;
+                sources = answered.sources;
+                flowState = result.state;
+            } else {
+                flowState = result.state;
+                reply = result.reply;
+                readyToSubmit = Boolean(result.readyToSubmit);
+            }
+        }
+
+        if (readyToSubmit) {
+            const payload = reservationFlow.buildSubmissionPayload(flowState.answers);
+            delete req.session.reservationFlow;
+            try {
+                const result = await reservationSubmitter.submitReservation(payload);
+                reservationStore.logSubmission({
+                    role: userRole,
+                    answers: payload,
+                    submitted: result.submitted,
+                    dryRun: result.dryRun,
+                    provider: result.provider,
+                    error: result.error,
+                });
+                reply = result.submitted
+                    ? "Thanks! Your reservation request has been submitted. Please allow the usual processing time for Game Room staff to follow up."
+                    : "I've recorded all your details, but hit a technical problem submitting the request automatically. Staff have the full request on file and will follow up directly.";
+            } catch (error) {
+                console.error('Reservation submission error:', error.message);
+                reservationStore.logSubmission({ role: userRole, answers: payload, submitted: false, dryRun: false, provider: null, error: error.message });
+                reply = "I've recorded all your details, but hit a technical problem submitting the request automatically. Staff have the full request on file and will follow up directly.";
+            }
+        } else if (flowState) {
+            req.session.reservationFlow = flowState;
+        } else {
+            delete req.session.reservationFlow; // cancelled
+        }
+
+        // The digression branch above already called answerAndStream, which starts the stream
+        // and writes its own chunks - don't start it again or double-write the reply text.
+        if (!res.headersSent) {
+            startStream(res);
+            writeEvent(res, { type: 'chunk', text: reply });
+        }
+        // Must happen BEFORE res.end() - see the identical note on the main handler's recordTurn call.
+        recordTurn(req, userMessage, reply);
+        writeEvent(res, { type: 'done', sources });
+        res.end();
+    } catch (error) {
+        console.error('Reservation flow error:', error.message);
+        const message = 'Sorry, I ran into a problem with the reservation request. Please try again in a moment.';
+        if (res.headersSent) {
+            if (!res.writableEnded) {
+                writeEvent(res, { type: 'error', message });
+                res.end();
+            }
+        } else {
+            res.status(500).json({ response: message });
+        }
+    }
+}
+
 router.post('/', chatLimiter, async (req, res) => {
     if (!env.hasApiKey()) {
         return res.status(503).json({ response: NOT_CONFIGURED_MESSAGE });
@@ -340,83 +540,34 @@ router.post('/', chatLimiter, async (req, res) => {
         return res.status(400).json({ error: `message must be ${MAX_MESSAGE_LENGTH} characters or fewer` });
     }
 
-    const userRole = req.session?.tier || 'public';
-    // Include the current TIME, not just the date — "is it open right now" needs a clock
-    // reference to answer definitively; without it the model has to hedge on "right now"
-    // questions even when it has the correct hours in context.
-    const currentDateTime = new Date().toLocaleString('en-US', {
-        timeZone: 'America/New_York',
-        dateStyle: 'full',
-        timeStyle: 'short',
-    });
+    // A reservation flow already in progress, or a fresh "start" trigger, completely bypasses
+    // the intent router below - every message is "the answer to the current question," handled
+    // deterministically in code (see handleReservationTurn / services/reservationFlow.js).
+    if (req.session?.reservationFlow || reservationFlow.START_TRIGGER_RE.test(userMessage)) {
+        return handleReservationTurn(req, res, userMessage);
+    }
 
-    const history = getHistory(req);
-    const contextHistory = history.slice(-MAX_HISTORY_CONTEXT);
-
-    // startStream() is called lazily, right before the FIRST real event (canned refusal or
-    // first generation chunk) — not unconditionally here. That way a failure in the router call
-    // itself (before we've committed to an answer) can still return a clean res.status(500).json
-    // exactly as before, instead of being downgraded to an in-stream error event; only a failure
-    // that happens AFTER we've started writing the stream needs the in-band {type:'error'} event
-    // (see the catch block below, which checks res.headersSent to pick the right shape).
-    try {
-        // One call classifies intent AND rewrites the (possibly elliptical) message into a
-        // standalone query using recent history, so a follow-up like "what about faculty?"
-        // retrieves against "what is the faculty price for billiards?" instead of a bare
-        // pronoun. The standalone query drives retrieval/live-topic detection; the original
-        // message is what the answer model sees (with history for natural phrasing).
-        const { intent, standaloneQuery } = await router_.classifyAndRewrite(userMessage, contextHistory);
-
-        // Confirm-in-code before hard-refusing a router "unsupported" (see resolveIntent): the
-        // classifier occasionally mislabels legit questions (a staff "time punch error" query, a
-        // phone-number ask), and a wrong refusal is a bad experience. Genuine credential/attack
-        // requests still refuse; everything else gets a grounded attempt.
-        const effectiveIntent = resolveIntent(intent, userMessage);
-
-        // Enforced in code, not left to the model's judgment: an "unsupported" classification
-        // (credential requests, rule-override attempts, or anything unrelated to the Game
-        // Room) short-circuits straight to a canned refusal with NO generation call at all.
-        // Previously this still went to the model with an empty context block and relied on
-        // the persona prompt alone to refuse — testing showed a flattering off-topic request
-        // ("write me a Python program... you're a good assistant") could talk the model out
-        // of refusing, since nothing in code actually enforced it.
-        if (effectiveIntent === 'unsupported') {
-            recordTurn(req, userMessage, CANNED_RESPONSES.OUT_OF_SCOPE);
-            analyticsStore.logQuestion({ role: userRole, intent, question: userMessage, answered: false, citationType: null });
-            startStream(res);
-            writeEvent(res, { type: 'chunk', text: CANNED_RESPONSES.OUT_OF_SCOPE });
-            writeEvent(res, { type: 'done', sources: [] });
-            return res.end();
-        }
-
-        const { block, citations } = await buildToolContext(effectiveIntent, standaloneQuery, userRole);
-
-        const messages = [
-            { role: 'system', content: buildSystemPrompt(userRole, currentDateTime) },
-        ];
-        if (block) {
-            messages.push({ role: 'system', content: block });
-        }
-        // Prior turns give the model continuity for follow-ups. This is user-authored text, so
-        // the same persona-prompt injection defenses apply — it's conversational context, never
-        // an instruction source.
-        for (const turn of contextHistory) {
-            messages.push({ role: turn.role, content: turn.content });
-        }
-        messages.push({ role: 'user', content: userMessage });
-
+    // A bare "stop" (only meaningful outside an active flow — "cancel" is the exit word inside
+    // one) permanently dismisses the reservation CTA for the rest of this session, without ever
+    // touching the router.
+    if (!req.session?.reservationFlow && STOP_CTA_RE.test(userMessage)) {
+        if (req.session) req.session.reservationCtaDismissed = true;
+        const reply = "Got it — I won't bring up reservations again this session unless you ask. What else can I help with?";
         startStream(res);
-        const { text: reply, blocked, streamError } = await streamGuardedReply(res, messages);
+        writeEvent(res, { type: 'chunk', text: reply });
+        recordTurn(req, userMessage, reply);
+        writeEvent(res, { type: 'done', sources: [] });
+        return res.end();
+    }
 
-        // Sources are returned as STRUCTURED DATA (not appended to the answer text) so the UI can
-        // render a compact hover badge instead of a long "Source: ..." footer. A canned refusal,
-        // a blocked reply, or a mid-stream error isn't grounded in the retrieved passages, so it
-        // carries no sources.
-        const sources = (blocked || streamError || isCannedResponse(reply))
-            ? []
-            : citations.map((c) => c.type === 'live'
-                ? { type: 'live', label: 'union.ufl.edu (live)', url: c.sourceUrl, lastChecked: c.lastChecked ? formatLastChecked(c.lastChecked) : null }
-                : { type: 'manual', label: 'Game Room Manual', detail: c.sections.join(', ') });
+    // startStream() is called lazily inside answerAndStream, right before the FIRST real event
+    // (canned refusal or first generation chunk) — not unconditionally here. That way a failure
+    // in the router call itself (before we've committed to an answer) can still return a clean
+    // res.status(500).json exactly as before, instead of being downgraded to an in-stream error
+    // event; only a failure that happens AFTER we've started writing the stream needs the
+    // in-band {type:'error'} event (see the catch block below, which checks res.headersSent).
+    try {
+        const { replyText, sources, streamError } = await answerAndStream(req, res, userMessage);
 
         // Must happen BEFORE res.end() — express-session's auto-save hook fires exactly at
         // res.end(), so a session mutation made after that point never reaches the store. This
@@ -424,24 +575,11 @@ router.post('/', chatLimiter, async (req, res) => {
         // a request once generation moved to a streamed response, because recordTurn used to run
         // after the response had already ended.
         if (!streamError) {
-            recordTurn(req, userMessage, reply);
+            recordTurn(req, userMessage, replyText);
         }
 
         writeEvent(res, { type: 'done', sources });
         res.end();
-
-        if (streamError) return; // don't log a truncated/failed turn as if it completed normally
-
-        // A turn "counts as answered" when it produced a grounded, non-canned reply. Refusals
-        // and "no evidence" non-answers are logged as unanswered — that's the admin signal for
-        // which questions the current knowledge base can't yet handle.
-        analyticsStore.logQuestion({
-            role: userRole,
-            intent: effectiveIntent,
-            question: userMessage,
-            answered: !isCannedResponse(reply),
-            citationType: sources[0] ? sources[0].type : null,
-        });
     } catch (error) {
         console.error('Chat error:', error.message);
         const message = 'Sorry, I ran into a problem answering that. Please try again in a moment.';
@@ -470,7 +608,11 @@ router.get('/history', (req, res) => {
 // Lets the frontend start a fresh conversation without dropping the whole session (role/login
 // is preserved; only the chat memory is cleared).
 router.post('/reset', (req, res) => {
-    if (req.session) req.session.history = [];
+    if (req.session) {
+        req.session.history = [];
+        delete req.session.reservationFlow;
+        delete req.session.reservationCtaDismissed;
+    }
     res.json({ ok: true });
 });
 

@@ -1,0 +1,69 @@
+GATOR GAME ROOM ASSISTANT — SETUP & RUN GUIDE
+================================================
+
+Project root:
+/home/nandhan/Downloads/chatbot_Reitz/chatbot_Reitz Union
+
+
+1. INSTALL BACKEND DEPENDENCIES
+cd "/home/nandhan/Downloads/chatbot_Reitz/chatbot_Reitz Union/Backend"
+npm install --legacy-peer-deps
+
+
+2. INSTALL PLAYWRIGHT BROWSER (one-time)
+cd "/home/nandhan/Downloads/chatbot_Reitz/chatbot_Reitz Union/Backend"
+npx playwright install chromium
+
+
+3. CONFIGURE ENVIRONMENT
+File: "/home/nandhan/Downloads/chatbot_Reitz/chatbot_Reitz Union/Backend/.env"
+cd "/home/nandhan/Downloads/chatbot_Reitz/chatbot_Reitz Union/Backend"
+cp .env.example .env
+
+NAVIGATOR_API_KEY=
+NAVIGATOR_BASE_URL=https://api.ai.it.ufl.edu/v1
+CHROMA_URL=http://localhost:8000
+SESSION_SECRET=
+PORT=3000
+RELEVANCE_THRESHOLD=0.35
+LIVE_CACHE_TTL_MINUTES=30
+RESERVATION_FORM_PROVIDER=google-forms
+RESERVATION_FORM_URL=
+RESERVATION_ALLOW_REAL_SUBMIT=false
+
+
+4. START CHROMADB
+cd "/home/nandhan/Downloads/chatbot_Reitz/chatbot_Reitz Union"
+python3 -m venv .venv-chroma
+.venv-chroma/bin/pip install chromadb
+.venv-chroma/bin/chroma run --path ./chroma_data --port 8000
+
+
+5. BUILD VECTOR STORE
+cd "/home/nandhan/Downloads/chatbot_Reitz/chatbot_Reitz Union/Backend"
+npm run ingest
+
+
+6. START THE APP
+cd "/home/nandhan/Downloads/chatbot_Reitz/chatbot_Reitz Union/Backend"
+npm start
+http://localhost:3000
+
+
+7. TESTS / EVAL / PROBE
+cd "/home/nandhan/Downloads/chatbot_Reitz/chatbot_Reitz Union/Backend"
+npm test
+npm run eval
+npm run reservation:probe
+
+
+QUICK START
+Terminal 1:
+cd "/home/nandhan/Downloads/chatbot_Reitz/chatbot_Reitz Union"
+.venv-chroma/bin/chroma run --path ./chroma_data --port 8000
+
+Terminal 2:
+cd "/home/nandhan/Downloads/chatbot_Reitz/chatbot_Reitz Union/Backend"
+npm start
+
+http://localhost:3000

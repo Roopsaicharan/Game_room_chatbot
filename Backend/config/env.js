@@ -28,8 +28,22 @@ if (!SESSION_SECRET) {
 const RELEVANCE_THRESHOLD = parseFloat(process.env.RELEVANCE_THRESHOLD) || 0.35;
 const LIVE_CACHE_TTL_MINUTES = parseFloat(process.env.LIVE_CACHE_TTL_MINUTES) || 30;
 
+// Reservation-flow submission target. 'google-forms' is a throwaway dev/test target so the
+// chat-to-form automation can be validated without spamming UF's real Qualtrics pipeline with
+// junk test data; 'qualtrics' points at the real form. RESERVATION_ALLOW_REAL_SUBMIT is the
+// hard safety gate the qualtrics adapter checks before ever clicking the real Submit button —
+// must be the literal string 'true', not just any truthy value, so it can't be flipped by
+// accident (e.g. a leftover '1' or 'yes' in an old .env).
+const RESERVATION_FORM_PROVIDER = process.env.RESERVATION_FORM_PROVIDER || 'google-forms';
+const RESERVATION_FORM_URL = process.env.RESERVATION_FORM_URL || '';
+const RESERVATION_ALLOW_REAL_SUBMIT = process.env.RESERVATION_ALLOW_REAL_SUBMIT === 'true';
+
 function hasApiKey() {
     return Boolean(NAVIGATOR_API_KEY);
+}
+
+function hasReservationFormUrl() {
+    return Boolean(RESERVATION_FORM_URL);
 }
 
 function hasManual() {
@@ -64,8 +78,12 @@ module.exports = {
     SESSION_SECRET,
     RELEVANCE_THRESHOLD,
     LIVE_CACHE_TTL_MINUTES,
+    RESERVATION_FORM_PROVIDER,
+    RESERVATION_FORM_URL,
+    RESERVATION_ALLOW_REAL_SUBMIT,
     hasApiKey,
     hasManual,
+    hasReservationFormUrl,
     ensurePrivateDir,
     ensureSessionsDir,
 };

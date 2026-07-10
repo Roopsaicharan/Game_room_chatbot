@@ -317,19 +317,34 @@ document.addEventListener('DOMContentLoaded', () => {
             return btn;
         }
 
-        wrap.appendChild(makeButton('up', 'Helpful answer', '👍'));
-        wrap.appendChild(makeButton('down', 'Unhelpful answer', '👎'));
+        wrap.appendChild(makeButton('up', 'Helpful answer', 'Helpful'));
+        wrap.appendChild(makeButton('down', 'Unhelpful answer', 'Not helpful'));
         return wrap;
     }
 
     // ============ Message Rendering ============
+    // Uses the existing gator_avatar.png asset (already used in the chat header) instead of an
+    // emoji character - some clients render emoji as a broken placeholder box instead of the
+    // intended glyph, an image always renders the same way regardless.
+    function createAvatar(type) {
+        const avatarDiv = document.createElement('div');
+        avatarDiv.classList.add('message-avatar');
+        if (type === 'bot') {
+            const img = document.createElement('img');
+            img.src = 'gator_avatar.png';
+            img.alt = 'Gator';
+            avatarDiv.appendChild(img);
+        } else {
+            avatarDiv.textContent = 'U';
+        }
+        return avatarDiv;
+    }
+
     function addMessage(content, type, sources, feedbackCtx) {
         const messageDiv = document.createElement('div');
         messageDiv.classList.add('message', type);
 
-        const avatarDiv = document.createElement('div');
-        avatarDiv.classList.add('message-avatar');
-        avatarDiv.textContent = type === 'bot' ? '🐊' : '👤';
+        const avatarDiv = createAvatar(type);
 
         const contentDiv = document.createElement('div');
         contentDiv.classList.add('message-content');
@@ -364,9 +379,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const messageDiv = document.createElement('div');
         messageDiv.classList.add('message', 'bot');
 
-        const avatarDiv = document.createElement('div');
-        avatarDiv.classList.add('message-avatar');
-        avatarDiv.textContent = '🐊';
+        const avatarDiv = createAvatar('bot');
 
         const contentDiv = document.createElement('div');
         contentDiv.classList.add('message-content');
@@ -402,9 +415,7 @@ document.addEventListener('DOMContentLoaded', () => {
         typingDiv.classList.add('message', 'bot');
         typingDiv.id = 'typingIndicator';
 
-        const avatarDiv = document.createElement('div');
-        avatarDiv.classList.add('message-avatar');
-        avatarDiv.textContent = '🐊';
+        const avatarDiv = createAvatar('bot');
 
         const contentDiv = document.createElement('div');
         contentDiv.classList.add('message-content');

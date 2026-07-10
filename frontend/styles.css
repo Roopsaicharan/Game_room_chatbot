@@ -512,8 +512,18 @@ ul {
     align-items: center;
     justify-content: center;
     font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--uf-blue);
     background-color: var(--bg-white);
     border: 1px solid var(--border-color);
+    overflow: hidden;
+    flex-shrink: 0;
+}
+
+.message-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
 }
 
 .message-content {
@@ -524,6 +534,7 @@ ul {
 
 .message-content p {
     margin: 0 0 8px 0;
+    text-align: justify;
 }
 
 .message-content p:last-child {
@@ -532,11 +543,34 @@ ul {
 
 .message-content ul {
     margin: 0 0 8px 0;
-    padding-left: 1.2em;
+    padding-left: 1.3em;
+    list-style: none; /* the global `ul { list-style: none; }` reset already covers this - kept
+                          explicit here since we draw our own bullet marker below instead */
 }
 
 .message-content ul:last-child {
     margin-bottom: 0;
+}
+
+.message-content ul li {
+    position: relative;
+    margin-bottom: 4px;
+    text-align: left; /* justify reads badly on short bullet lines - keep these left-aligned */
+}
+
+.message-content ul li:last-child {
+    margin-bottom: 0;
+}
+
+.message-content ul li::before {
+    content: "•";
+    position: absolute;
+    left: -1.1em;
+}
+
+.message.bot .message-content ul li::before {
+    color: var(--uf-blue);
+    font-weight: bold;
 }
 
 .message.bot .message-content {

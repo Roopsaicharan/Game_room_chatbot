@@ -5,6 +5,7 @@ const { requireTier } = require('../middleware/requireTier');
 const { ingestManual } = require('../scripts/ingest');
 const searchManual = require('../services/searchManual');
 const analyticsStore = require('../services/analyticsStore');
+const reservationStore = require('../services/reservationStore');
 
 const router = express.Router();
 
@@ -82,6 +83,11 @@ router.get('/logs', (req, res) => {
 router.get('/feedback', (req, res) => {
     const limit = Math.min(parseInt(req.query.limit, 10) || 100, 500);
     res.json({ feedback: analyticsStore.recentFeedback(limit) });
+});
+
+router.get('/reservations', (req, res) => {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 100, 500);
+    res.json({ recent: reservationStore.recentReservations(limit) });
 });
 
 module.exports = router;
