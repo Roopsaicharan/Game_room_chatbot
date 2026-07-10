@@ -140,7 +140,7 @@ async function safeSearchManual(message, role) {
         return [];
     }
 }
-routes
+
 function liveCitation(result) {
     return { type: 'live', sourceUrl: result.sourceUrl, lastChecked: result.lastChecked };
 }
