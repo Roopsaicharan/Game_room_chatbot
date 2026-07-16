@@ -57,18 +57,26 @@ test('full House Rental happy path reaches confirm, then submit', () => {
     assert.match(summary, /submit/i);
 });
 
-test('non-House-Rental request type skips straight to summary after the core fields', () => {
-    const coreOnly = [
+test('non-House-Rental request type asks the shared logistics fields (payment/food/tax) but skips the House-Rental-only ones', () => {
+    const answers = [
         'John Smith', 'john@ufl.edu', '352-555-0100',
-        '1',                    // affiliation
+        '1',                    // affiliation -> Registered UF Org (orgName asked)
         'Chess Club',           // orgName
         '4',                    // requestType -> Lane Reservation Only
         '01/15/2027', '2:00 PM', '4:00 PM', 'none', '10', 'Lane reservation test',
+        // payment/food/tax are required by the target form for ALL request types, so the flow
+        // asks them here too — only the House-Rental-only add-ons/open-closed are skipped.
+        '2',                    // paymentForm -> Onsite (check/card)
+        '2',                    // servingFood -> No
+        '2',                    // taxExempt -> No
     ];
-    const { state } = driveFlow(coreOnly);
+    const { state } = driveFlow(answers);
     assert.equal(state.awaitingConfirm, true);
     assert.equal(state.answers.requestType, 'Lane Reservation Only');
-    assert.equal('addons' in state.answers, false, 'House-Rental-only fields must not be asked');
+    assert.equal(state.answers.paymentForm, 'Onsite (check/card)');
+    assert.equal(state.answers.taxExempt, 'No');
+    assert.equal('addons' in state.answers, false, 'House-Rental-only add-ons must not be asked');
+    assert.equal('openOrClosed' in state.answers, false, 'House-Rental-only open/closed must not be asked');
     const summary = reservationFlow.summaryText(state.answers);
     assert.match(summary, /Lane Reservation Only/);
     assert.match(summary, /staff will follow up/i);

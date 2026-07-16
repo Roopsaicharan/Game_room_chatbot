@@ -110,6 +110,14 @@ function validateAttendees(raw) {
     return { ok: true, value: n };
 }
 
+// The manual's customer rules state bowling is 6 people per lane, so a "Lane Reservation Only"
+// request can derive the number of lanes from the headcount rather than making the visitor work
+// it out themselves.
+const PEOPLE_PER_LANE = 6;
+function lanesForAttendees(attendees) {
+    return Math.ceil(attendees / PEOPLE_PER_LANE);
+}
+
 // --- Numbered-choice matching (deterministic, no LLM) -----------------------------------
 // 1) an in-range number picks by index
 // 2) else an exact (case-insensitive) label match
@@ -177,6 +185,15 @@ const AFFILIATION_OPTIONS = [
     { label: 'Non-Affiliated with UF' },
 ];
 
+// Affiliations where the visitor has no organization/department to name. Issue #9: we don't ask
+// these visitors for an org name. Issue #1: the target form still marks that field REQUIRED, so
+// rather than leave it blank (which makes the form reject the submission) the orgName step
+// auto-fills "N/A" for them via its autoAnswer hook below.
+const NO_ORG_AFFILIATIONS = new Set([
+    'UF Student (not with an organization)',
+    'Non-Affiliated with UF',
+]);
+
 const REQUEST_TYPE_OPTIONS = [
     { label: 'House Rental' },
     { label: 'Half House Rental' },
@@ -237,10 +254,10 @@ const STEPS = [
         question: 'Name of Organization/Department (no acronyms)',
         promptText: 'What organization or department is this for? (spell it out, no acronyms)',
         type: 'text',
-        appliesTo: (answers) => {
-            const affil = answers.affiliation;
-            return affil !== 'UF Student (not with an organization)' && affil !== 'Non-Affiliated with UF';
-        },
+        // Always part of the request (the form requires it), but silently auto-answered "N/A"
+        // for the no-org affiliations so those visitors are never prompted for it (issues #9/#1).
+        appliesTo: () => true,
+        autoAnswer: (answers) => (NO_ORG_AFFILIATIONS.has(answers.affiliation) ? 'N/A' : undefined),
         validate: validateText(),
     },
     {
@@ -296,6 +313,19 @@ const STEPS = [
         type: 'number',
         appliesTo: () => true,
         validate: validateAttendees,
+        // For a lane-only request, confirm the derived lane count back to the visitor (6
+        // people/lane per the manual) right after they give the headcount, so they don't have
+        // to specify lanes directly. Returns null for every other request type.
+        noteAfter: (answers) => {
+            if (answers.requestType !== 'Lane Reservation Only' || typeof answers.attendees !== 'number') {
+                return null;
+            }
+            const lanes = lanesForAttendees(answers.attendees);
+            const overCap = lanes > 5
+                ? ' Heads up: lane reservations over 5 lanes aren\'t guaranteed and are subject to approval.'
+                : '';
+            return `That works out to about ${lanes} lane${lanes === 1 ? '' : 's'} (we plan roughly ${PEOPLE_PER_LANE} people per lane), which I'll note on your request.${overCap}`;
+        },
     },
     {
         id: 'purpose',
@@ -332,7 +362,10 @@ const STEPS = [
         promptText: 'How will this be paid for?',
         type: 'single-choice',
         options: PAYMENT_OPTIONS,
-        appliesTo: isHouseRental,
+        // Payment applies to every reservation, not just House Rentals — and the target form
+        // marks Form of Payment REQUIRED for all request types, so gating it to House Rental left
+        // every other request type unable to submit (issue #1). Asked for all types now.
+        appliesTo: () => true,
         validate: validateSingleChoice(PAYMENT_OPTIONS),
     },
     {
@@ -341,7 +374,8 @@ const STEPS = [
         promptText: 'Do you plan on serving food at this event?',
         type: 'single-choice',
         options: YES_NO_OPTIONS,
-        appliesTo: isHouseRental,
+        // Likewise required by the form for all request types (issue #1).
+        appliesTo: () => true,
         validate: validateSingleChoice(YES_NO_OPTIONS),
     },
     {
@@ -350,7 +384,9 @@ const STEPS = [
         promptText: 'Is your organization or group tax-exempt?',
         type: 'single-choice',
         options: YES_NO_OPTIONS,
-        appliesTo: isHouseRental,
+        // Required by the form for all request types (issue #1) — tax status bears on any paid
+        // reservation, so it's asked for every request type, not just House Rentals.
+        appliesTo: () => true,
         validate: validateSingleChoice(YES_NO_OPTIONS),
     },
     // No file-upload step: the real form's tax-exempt certificate upload has no chat
@@ -359,6 +395,28 @@ const STEPS = [
 
 function getCurrentStep(answers) {
     return STEPS.find((step) => !(step.id in answers) && step.appliesTo(answers)) || null;
+}
+
+// Advances past any steps that can be answered WITHOUT prompting the visitor (a step whose
+// autoAnswer(answers) returns a value — e.g. orgName -> "N/A" for a solo UF student). Loops so a
+// run of consecutive auto-answers resolves in one advance, and returns the next step that must
+// actually be asked (or null when everything is answered). The value-carrying `answers` it
+// returns must be persisted by the caller so the auto-filled fields reach the summary/submission.
+function resolveAutoAnswers(answers) {
+    let current = answers;
+    for (let i = 0; i <= STEPS.length; i++) {
+        const step = getCurrentStep(current);
+        if (!step) return { answers: current, step: null };
+        if (typeof step.autoAnswer === 'function') {
+            const value = step.autoAnswer(current);
+            if (value !== undefined && value !== null) {
+                current = { ...current, [step.id]: value };
+                continue;
+            }
+        }
+        return { answers: current, step };
+    }
+    return { answers: current, step: getCurrentStep(current) };
 }
 
 function renderPrompt(step) {
@@ -385,6 +443,10 @@ function summaryText(answers) {
         });
 
     let notes = '';
+    if (answers.requestType === 'Lane Reservation Only' && typeof answers.attendees === 'number') {
+        const lanes = lanesForAttendees(answers.attendees);
+        notes += `\n\nBased on ${answers.attendees} attendees at ${PEOPLE_PER_LANE} people per lane, that's about ${lanes} lane${lanes === 1 ? '' : 's'} — staff will confirm final lane availability.`;
+    }
     if (answers.taxExempt === 'Yes') {
         notes += "\n\nSince you indicated tax-exempt status, please email a copy of your tax-exempt certificate separately — this chat can't accept file uploads yet.";
     }
@@ -396,9 +458,8 @@ function summaryText(answers) {
 }
 
 function start() {
-    const answers = {};
+    const { answers, step: firstStep } = resolveAutoAnswers({});
     const state = { version: SCHEMA_VERSION, answers, awaitingConfirm: false, startedAt: new Date().toISOString() };
-    const firstStep = getCurrentStep(answers);
     return { state, reply: `${GREETING}\n\n${renderPrompt(firstStep)}` };
 }
 
@@ -437,12 +498,18 @@ function handleAnswer(state, rawMessage) {
         return { state, reply: `${result.error}\n\n${pendingPrompt}`, invalid: true, pendingPrompt };
     }
 
-    const answers = { ...state.answers, [currentStep.id]: result.value };
-    const nextStep = getCurrentStep(answers);
+    const answered = { ...state.answers, [currentStep.id]: result.value };
+    // An accepted answer can carry a derived confirmation (e.g. lanes-needed for a lane-only
+    // request) that's shown before the next question / summary.
+    const note = typeof currentStep.noteAfter === 'function' ? currentStep.noteAfter(answered) : null;
+    const prefix = note ? `${note}\n\n` : '';
+    // Silently fill any steps that don't need to be asked (e.g. orgName -> "N/A") before deciding
+    // what to prompt next.
+    const { answers, step: nextStep } = resolveAutoAnswers(answered);
     if (nextStep) {
-        return { state: { ...state, answers }, reply: renderPrompt(nextStep) };
+        return { state: { ...state, answers }, reply: `${prefix}${renderPrompt(nextStep)}` };
     }
-    return { state: { ...state, answers, awaitingConfirm: true }, reply: summaryText(answers) };
+    return { state: { ...state, answers, awaitingConfirm: true }, reply: `${prefix}${summaryText(answers)}` };
 }
 
 function buildSubmissionPayload(answers) {
