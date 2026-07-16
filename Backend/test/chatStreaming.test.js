@@ -42,7 +42,12 @@ test('a credential split across many stream deltas never appears in any chunk ev
         for (const piece of fragment(secretReply)) yield piece;
     };
     try {
-        const res = await request(freshApp()).post('/api/chat').send({ message: 'what is the password' });
+        // NOTE: the trigger message must NOT itself be a credential-LOCATION query (e.g. "what
+        // is the password"), or routes/chat.js's issue-#14 guard short-circuits to a canned
+        // pointer before generation and this streaming path never runs. This test is about the
+        // output guard catching a credential the MODEL emits, so we use a neutral question and
+        // let the mocked stream produce the secret.
+        const res = await request(freshApp()).post('/api/chat').send({ message: 'give me the closing rundown' });
         assert.equal(res.status, 200);
         const events = parseNdjsonEvents(res.text);
 
@@ -132,6 +137,31 @@ test('a mid-stream generation failure with no text sent yet reports a clean erro
         const errorEvent = events.find((e) => e.type === 'error');
         assert.ok(errorEvent, 'expected an error event');
         assert.equal(errorEvent.message.includes('navigator connection dropped'), false, 'internal error text must not leak');
+    } finally {
+        navigator.chatComplete = originalComplete;
+        navigator.chatCompleteStream = originalStream;
+    }
+});
+
+// Issue #14: a "where do I find <credential>" question is answered deterministically in code and
+// must never reach the router or the model — the model was observed inventing fake sign-in steps
+// for a system it had no grounded context for. This asserts the short-circuit fires (canned
+// pointer, empty sources) AND that neither the router call nor generation was invoked.
+test('a credential-location question short-circuits to a canned pointer without calling the model', async () => {
+    const originalComplete = navigator.chatComplete;
+    const originalStream = navigator.chatCompleteStream;
+    let modelCalled = false;
+    navigator.chatComplete = async () => { modelCalled = true; return '{"intent":"casual","standalone_query":"x"}'; };
+    navigator.chatCompleteStream = async function* () { modelCalled = true; yield 'should not happen'; };
+    try {
+        const res = await request(freshApp()).post('/api/chat').send({ message: 'where do I find the wifi password?' });
+        assert.equal(res.status, 200);
+        const events = parseNdjsonEvents(res.text);
+        assert.equal(modelCalled, false, 'the model/router must not be called for a credential-location query');
+        const text = fullText(events);
+        assert.match(text, /restricted/i, 'a public user gets the RESTRICTED pointer');
+        assert.ok(!/hunter2|should not happen/i.test(text), 'no generated text leaked through');
+        assert.deepEqual(doneEvent(events).sources, [], 'a canned pointer carries no sources');
     } finally {
         navigator.chatComplete = originalComplete;
         navigator.chatCompleteStream = originalStream;

@@ -53,6 +53,24 @@ const RESERVATION_TOPIC = /\b(reservation|reserve(?:[^\w]+\w+){0,6}[^\w]+(?:lane
 // Lets a visitor opt out of the reservation CTA for the rest of the session (checked only when
 // no reservation flow is active - "cancel" is the exit word once inside the flow itself).
 const STOP_CTA_RE = /^stop$/i;
+
+// Issue #14: "where do I find the Connect2 password", "what's the login for the punch-in
+// desktop" and similar credential-LOCATION questions are answered deterministically in code, not
+// left to the model. Credentials are ALWAYS sanitized out of the vector store
+// (services/sanitizer.js), so no retrieval ever legitimately contains the value — the model was
+// observed inventing plausible-but-fake sign-in steps by repurposing an unrelated system's
+// password section (e.g. applying POS "Menu > Change Password" steps to a Connect2 question).
+// A code short-circuit removes that variance: public users are told it's restricted, and staff
+// are pointed to where they can look it up in person. This deliberately only matches "where/what
+// IS the credential" phrasing, NOT "how do I CHANGE/reset my password", which stays a normal
+// answerable how-to.
+const CREDENTIAL_NOUN_RE = /\b(passwords?|passcodes?|pass ?codes?|logins?|log ?in|credentials?|access codes?|api keys?|pin numbers?)\b/i;
+const CREDENTIAL_LOCATION_RE = /\b(where|what(?:'?s| is| are)?|find|finding|locate|located|look ?up|get|retrieve|obtain)\b/i;
+const CREDENTIAL_CHANGE_RE = /\b(change|changing|reset|resetting|update|updating|set ?up|create|creating|make|forgot|expired)\b/i;
+function isCredentialLocationQuery(msg) {
+    return CREDENTIAL_NOUN_RE.test(msg) && CREDENTIAL_LOCATION_RE.test(msg) && !CREDENTIAL_CHANGE_RE.test(msg);
+}
+const STAFF_CREDENTIAL_POINTER = "I can't display logins or passwords here. For a specific credential, check the physical operations manual kept at the front desk first, then the copy in the Teams channel — and if it's still not there, ask your supervisor.";
 // Used inside the reservation flow to tell "this doesn't parse as a valid answer because it's
 // actually a question" from "this doesn't parse as a valid answer because it's just wrong" - a
 // message that fails step validation AND looks question-shaped gets answered for real instead
@@ -98,10 +116,24 @@ const CANNED_TEXTS = new Set([
 
 // A canned refusal/decline isn't grounded in the retrieved passages that happened to be
 // fetched for the turn, so it shouldn't be citing them as if they were.
+// The model occasionally re-renders a canned string with typographic punctuation (a
+// non-breaking hyphen in the phone number, an em/en dash, a non-breaking space), which broke a
+// naive substring match and let a source badge slip back onto a canned reply. Normalize dashes
+// and spaces on both sides before comparing so those variants still register as canned.
+function normalizeForCanned(s) {
+    return s
+        .normalize('NFKC')
+        .replace(/[‐-―−]/g, '-')      // hyphen/figure/en/em/minus dashes -> "-"
+        .replace(/[    ]/g, ' ') // no-break / thin spaces -> " "
+        .replace(/[‘’‚‛]/g, "'")       // curly / low single quotes -> apostrophe
+        .replace(/[“”„‟]/g, '"')       // curly double quotes
+        .replace(/\s+/g, ' ')
+        .trim();
+}
 function isCannedResponse(text) {
-    const trimmed = text.trim();
+    const norm = normalizeForCanned(text);
     for (const canned of CANNED_TEXTS) {
-        if (trimmed.includes(canned)) return true;
+        if (norm.includes(normalizeForCanned(canned))) return true;
     }
     return false;
 }
@@ -568,6 +600,19 @@ router.post('/', chatLimiter, async (req, res) => {
     if (!req.session?.reservationFlow && STOP_CTA_RE.test(userMessage)) {
         if (req.session) req.session.reservationCtaDismissed = true;
         const reply = "Got it — I won't bring up reservations again this session unless you ask. What else can I help with?";
+        startStream(res);
+        writeEvent(res, { type: 'chunk', text: reply });
+        recordTurn(req, userMessage, reply);
+        writeEvent(res, { type: 'done', sources: [] });
+        return res.end();
+    }
+
+    // Issue #14: deterministic handling of credential-LOCATION questions (see the regexes above).
+    // Never routes to the model, so it can't fabricate sign-in steps for a system it has no
+    // grounded context for. No sources — this is a canned pointer, not a retrieved answer.
+    if (!req.session?.reservationFlow && isCredentialLocationQuery(userMessage)) {
+        const tier = req.session?.tier || 'public';
+        const reply = tier === 'public' ? CANNED_RESPONSES.RESTRICTED : STAFF_CREDENTIAL_POINTER;
         startStream(res);
         writeEvent(res, { type: 'chunk', text: reply });
         recordTurn(req, userMessage, reply);
