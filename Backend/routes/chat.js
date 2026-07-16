@@ -49,7 +49,7 @@ const PUBLIC_INFO = /\b(phone|contact|address|e-?mail|hours?|pricing|price|cost|
 // controllers) or other unrelated "rent"/"book" usage. A bare rent(al)?/book(ing)? was too
 // broad — a question like "do I need to rent shoes if I have my own?" isn't a reservation
 // request, but matched the old pattern. "rent"/"book" now require a venue-shaped object nearby.
-const RESERVATION_TOPIC = /\b(reservation|reserve (the|a|my)|house rental|half house|weekend rental package|book (a|the|my) (room|space|house|lane|party|event)|rent (the|a) (room|space|house)|private event)\b/i;
+const RESERVATION_TOPIC = /\b(reservation|reserve(?:[^\w]+\w+){0,6}[^\w]+(?:lane|room|space|house|table|party|event)s?|house rental|half house|weekend rental package|book(?:[^\w]+\w+){0,6}[^\w]+(?:room|space|house|lane|party|event)s?|rent(?:[^\w]+\w+){0,6}[^\w]+(?:room|space|house|lane|party|event)s?|private event)\b/i;
 // Lets a visitor opt out of the reservation CTA for the rest of the session (checked only when
 // no reservation flow is active - "cancel" is the exit word once inside the flow itself).
 const STOP_CTA_RE = /^stop$/i;
@@ -99,7 +99,11 @@ const CANNED_TEXTS = new Set([
 // A canned refusal/decline isn't grounded in the retrieved passages that happened to be
 // fetched for the turn, so it shouldn't be citing them as if they were.
 function isCannedResponse(text) {
-    return CANNED_TEXTS.has(text.trim());
+    const trimmed = text.trim();
+    for (const canned of CANNED_TEXTS) {
+        if (trimmed.includes(canned)) return true;
+    }
+    return false;
 }
 
 function formatLastChecked(iso) {
@@ -220,7 +224,7 @@ async function buildToolContext(intent, message, role) {
         // the manual — so this runs EVEN WHEN manual retrieval found nothing. When we already
         // have manual passages, use the warm cache (zero extra fetch); when the manual came up
         // empty, actively fetch so a contact/hours question still gets an answer.
-        if (LIVE_RELEVANT.test(message)) {
+        if (LIVE_RELEVANT.test(message) || passages.length === 0) {
             const topic = liveInfo.detectTopic(message);
             const live = passages.length > 0
                 ? liveInfo.getCachedLiveInfo(topic)
@@ -291,19 +295,19 @@ const STREAM_HOLDBACK_CHARS = 80;
 //     rare-case smoothness trade for correctness that's trivial to reason about.
 // Returns { text, blocked, streamError } the same shape outputGuard.guard() would, so callers
 // downstream (recordTurn, analytics, citations) don't need to know generation was streamed.
-async function streamGuardedReply(res, messages) {
+async function streamGuardedReply(res, messages, userRole = 'public') {
     let raw = '';
     let sentPlain = ''; // always a literal, unmodified prefix of raw — never itself redacted
 
     try {
         for await (const delta of navigator.chatCompleteStream(messages, { temperature: 0.3 })) {
             raw += delta;
-            if (outputGuard.hasBlockingContent(raw)) {
+            if (userRole === 'public' && outputGuard.hasBlockingContent(raw)) {
                 writeEvent(res, { type: 'blocked', text: outputGuard.RESTRICTED_MESSAGE });
                 return { text: outputGuard.RESTRICTED_MESSAGE, blocked: true };
             }
-            const safeLen = Math.max(0, raw.length - STREAM_HOLDBACK_CHARS);
-            const redactStart = outputGuard.earliestRedactMatchStart(raw);
+            const safeLen = userRole === 'public' ? Math.max(0, raw.length - STREAM_HOLDBACK_CHARS) : raw.length;
+            const redactStart = userRole === 'public' ? outputGuard.earliestRedactMatchStart(raw) : null;
             const cut = redactStart === null ? safeLen : Math.min(safeLen, redactStart);
             if (cut > sentPlain.length) {
                 writeEvent(res, { type: 'chunk', text: raw.slice(sentPlain.length, cut) });
@@ -327,15 +331,23 @@ async function streamGuardedReply(res, messages) {
     // sentPlain is guaranteed to contain no redact match (we never cut through or past one), it's
     // unaffected by redaction — finalRedacted is guaranteed to start with sentPlain verbatim, so
     // slicing at sentPlain.length is safe.
-    if (outputGuard.hasBlockingContent(raw)) {
-        writeEvent(res, { type: 'blocked', text: outputGuard.RESTRICTED_MESSAGE });
-        return { text: outputGuard.RESTRICTED_MESSAGE, blocked: true };
+    if (userRole === 'public') {
+        if (outputGuard.hasBlockingContent(raw)) {
+            writeEvent(res, { type: 'blocked', text: outputGuard.RESTRICTED_MESSAGE });
+            return { text: outputGuard.RESTRICTED_MESSAGE, blocked: true };
+        }
+        const finalRedacted = outputGuard.applyRedactions(raw);
+        if (finalRedacted.length > sentPlain.length) {
+            writeEvent(res, { type: 'chunk', text: finalRedacted.slice(sentPlain.length) });
+        }
+        return { text: finalRedacted, blocked: false };
+    } else {
+        // Staff/Admin bypass the output guard
+        if (raw.length > sentPlain.length) {
+            writeEvent(res, { type: 'chunk', text: raw.slice(sentPlain.length) });
+        }
+        return { text: raw, blocked: false };
     }
-    const finalRedacted = outputGuard.applyRedactions(raw);
-    if (finalRedacted.length > sentPlain.length) {
-        writeEvent(res, { type: 'chunk', text: finalRedacted.slice(sentPlain.length) });
-    }
-    return { text: finalRedacted, blocked: false };
 }
 
 // Runs the full manual/live/casual RAG pipeline for a message and streams the answer as chunk
@@ -347,6 +359,7 @@ async function streamGuardedReply(res, messages) {
 // both it and the reservation flow's mid-flow Q&A path share one implementation.
 async function answerAndStream(req, res, userMessage, { suppressReservationCta = false } = {}) {
     const userRole = req.session?.tier || 'public';
+    console.log('CHAT REQUEST: message=', userMessage, 'userRole=', userRole);
     // Include the current TIME, not just the date — "is it open right now" needs a clock
     // reference to answer definitively; without it the model has to hedge on "right now"
     // questions even when it has the correct hours in context.
@@ -387,7 +400,7 @@ async function answerAndStream(req, res, userMessage, { suppressReservationCta =
     messages.push({ role: 'user', content: userMessage });
 
     startStream(res);
-    const { text: reply, blocked, streamError } = await streamGuardedReply(res, messages);
+    const { text: reply, blocked, streamError } = await streamGuardedReply(res, messages, userRole);
 
     // Sources are returned as STRUCTURED DATA (not appended to the answer text) so the UI can
     // render a compact hover badge instead of a long "Source: ..." footer.
@@ -483,9 +496,11 @@ async function handleReservationTurn(req, res, userMessage) {
                     provider: result.provider,
                     error: result.error,
                 });
-                reply = result.submitted
-                    ? "Thanks! Your reservation request has been submitted. Please allow the usual processing time for Game Room staff to follow up."
-                    : "I've recorded all your details, but hit a technical problem submitting the request automatically. Staff have the full request on file and will follow up directly.";
+                if (result.submitted || result.dryRun) {
+                    reply = "Thanks! Your reservation request has been submitted. Please allow the usual processing time for Game Room staff to follow up.";
+                } else {
+                    reply = "I've recorded all your details, but hit a technical problem submitting the request automatically. Staff have the full request on file and will follow up directly.";
+                }
             } catch (error) {
                 console.error('Reservation submission error:', error.message);
                 reservationStore.logSubmission({ role: userRole, answers: payload, submitted: false, dryRun: false, provider: null, error: error.message });
@@ -614,6 +629,24 @@ router.post('/reset', (req, res) => {
         delete req.session.reservationCtaDismissed;
     }
     res.json({ ok: true });
+});
+
+// Returns the live facility status (checking for closures or special notices)
+router.get('/status', async (req, res) => {
+    try {
+        const live = liveInfo.getCachedLiveInfo('gameroom') 
+            || await liveInfo.fetchLiveInfo('gameroom').catch(() => null);
+        
+        if (live && live.content) {
+            const alert = liveInfo.closureAlertForToday(live.content);
+            if (alert) {
+                return res.json({ hasClosure: true, notice: alert.snippet });
+            }
+        }
+        res.json({ hasClosure: false });
+    } catch (err) {
+        res.json({ hasClosure: false });
+    }
 });
 
 // Thumbs up/down on an answer. Kept lightweight and public — the endpoint the (future) UI

@@ -10,13 +10,15 @@ can't verify.
 
 ## Architecture at a glance
 
-- **Models — UF Navigator only.** Generation and routing use `gpt-oss-120b`; embeddings use
-  `nomic-embed-text-v1.5`. Both are called through the `openai` npm SDK pointed at
+- **Models — UF Navigator only.** Generation uses `gpt-oss-120b`; routing uses
+  `llama-3.1-8b-instruct` (much faster for the classification step); embeddings use
+  `nomic-embed-text-v1.5`. All are called through the `openai` npm SDK pointed at
   `https://api.ai.it.ufl.edu/v1`. Manual content is never sent to any other model or provider.
 - **Router — code, not native tool-calling.** `services/router.js` classifies each message
-  into `manual` / `live` / `casual` / `unsupported` with one Navigator call, and
-  `routes/chat.js` decides what to fetch based on that label. This keeps control flow (and
-  the safety checks around it) in our code rather than trusting a model's own tool-choice.
+  into `manual` / `live` / `casual` / `unsupported` with one Navigator call using the fast
+  `llama-3.1-8b-instruct` model, and `routes/chat.js` decides what to fetch based on that
+  label. This keeps control flow (and the safety checks around it) in our code rather than
+  trusting a model's own tool-choice.
 - **Manual RAG — ChromaDB, self-hosted, precomputed embeddings.** The manual is chunked and
   embedded by `scripts/ingest.js` and stored in a Chroma collection with **no embedding
   function** — Chroma never computes its own vectors, only stores/searches ones we hand it.

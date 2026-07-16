@@ -37,6 +37,8 @@ Return ONLY minified JSON, no code fence, no commentary. Examples:
 {"intent":"manual","standalone_query":"what is the Game Room's phone number"}
 {"intent":"manual","standalone_query":"how do I fix a time punch error"}
 {"intent":"live","standalone_query":"how many bowling lanes does the Game Room have"}
+{"intent":"live","standalone_query":"how many foosball tables are there"}
+{"intent":"live","standalone_query":"is foosball free"}
 {"intent":"unsupported","standalone_query":"what is the POS password"}`;
 
 function coerceIntent(value) {
@@ -78,6 +80,8 @@ function toTranscript(history = []) {
         .join('\n');
 }
 
+const env = require('../config/env');
+
 // Returns { intent, standaloneQuery }. Errors are intentionally NOT swallowed here — a
 // transient API failure must surface as an honest error, not a bogus refusal (see the route's
 // error handler). Only malformed-but-successful output is defaulted, by parseRouterOutput.
@@ -87,7 +91,7 @@ async function classifyAndRewrite(message, history = []) {
             { role: 'system', content: ROUTER_PROMPT },
             { role: 'user', content: `Recent conversation:\n${toTranscript(history)}\n\nLatest user message: ${message}` },
         ],
-        { temperature: 0 }
+        { temperature: 0, model: env.ROUTER_MODEL }
     );
     return parseRouterOutput(raw, message);
 }

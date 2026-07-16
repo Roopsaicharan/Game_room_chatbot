@@ -3,7 +3,9 @@
  * Handles UI interactions, chat widget, and animations
  */
 
-document.addEventListener('DOMContentLoaded', () => {
+const API_BASE = window.GATOR_BOT_BASE_URL || '';
+
+const initGatorBot = () => {
     // ============ DOM Elements ============
     const chatWidget = document.getElementById('chatWidget');
     const chatFab = document.getElementById('chatFab');
@@ -42,17 +44,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function refreshRoleBanner() {
         try {
-            const res = await fetch('/api/auth/session');
-            const data = await res.json();
-            currentTier = data.tier || 'public';
-            if (!roleBanner) return;
-            if (currentTier !== 'public') {
-                roleBannerText.textContent = `Logged in — ${ROLE_LABELS[currentTier] || currentTier}`;
-                roleBanner.classList.add('visible');
-                if (heroChatBtn) heroChatBtn.textContent = HERO_BTN_LABELS[currentTier] || heroChatBtnDefaultText;
-            } else {
-                roleBanner.classList.remove('visible');
-                if (heroChatBtn) heroChatBtn.textContent = heroChatBtnDefaultText;
+            const res = await fetch(`${API_BASE}/api/auth/session`, { credentials: 'include' });
+            if (res.ok) {
+                const data = await res.json();
+                currentTier = data.tier || 'public';
+                if (!roleBanner) return;
+                if (currentTier !== 'public') {
+                    roleBannerText.textContent = `Logged in — ${ROLE_LABELS[currentTier] || currentTier}`;
+                    roleBanner.classList.add('visible');
+                    if (heroChatBtn) heroChatBtn.textContent = HERO_BTN_LABELS[currentTier] || heroChatBtnDefaultText;
+                } else {
+                    roleBanner.classList.remove('visible');
+                    if (heroChatBtn) heroChatBtn.textContent = heroChatBtnDefaultText;
+                }
             }
         } catch (err) {
             // session check is non-critical — fail silently, treat as public
@@ -61,15 +65,53 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (roleBannerLogout) {
         roleBannerLogout.addEventListener('click', async () => {
-            await fetch('/api/auth/logout', { method: 'POST' });
+            await fetch(`${API_BASE}/api/auth/logout`, { method: 'POST', credentials: 'include' });
             window.location.reload();
         });
+    }
+
+    // ============ Facility Status Banner ============
+    async function checkFacilityStatus() {
+        try {
+            const res = await fetch(`${API_BASE}/api/chat/status`, { credentials: 'include' });
+            const data = await res.json();
+            if (data.hasClosure && data.notice) {
+                const banner = document.createElement('div');
+                banner.className = 'status-banner closure';
+                banner.innerHTML = `<strong>Closure Notice:</strong> ${escapeHtml(data.notice)}`;
+                chatMessages.parentNode.insertBefore(banner, chatMessages);
+            }
+        } catch (err) {}
     }
 
     // ============ Chat Widget Toggle ============
     function addGreeting() {
         hasGreeted = true;
-        addBotMessage("Good day! 🐊 I'm your Gator Game Room Assistant powered by the UF Navigator LLM API.<br><br>Ask me anything about policies, procedures, or operations based on the Game Room Manual!");
+        const msg = addBotMessage("Good day! 🐊 I'm your Gator Game Room Assistant powered by the UF Navigator LLM API.<br><br>Ask me anything about policies, procedures, or operations based on the Game Room Manual!");
+
+        const chipsDiv = document.createElement('div');
+        chipsDiv.className = 'suggestion-chips';
+        chipsDiv.style.marginTop = '10px';
+
+        const questions = currentTier === 'public' 
+            ? ["What are the hours?", "How much does bowling cost?", "Can I bring food?"]
+            : ["How do I close the register at night?", "Procedure for a broken pinsetter", "Guest alcohol policy"];
+
+        questions.forEach(q => {
+            const chip = document.createElement('div');
+            chip.className = 'suggestion-chip';
+            chip.dataset.question = q;
+            chip.textContent = q;
+            chipsDiv.appendChild(chip);
+        });
+
+        msg.querySelector('.message-content').appendChild(chipsDiv);
+
+        chipsDiv.querySelectorAll('.suggestion-chip').forEach(chip => {
+            chip.addEventListener('click', () => {
+                sendMessage(chip.dataset.question);
+            });
+        });
     }
 
     function openChat() {
@@ -102,7 +144,7 @@ document.addEventListener('DOMContentLoaded', () => {
         chatReset.addEventListener('click', async () => {
             chatReset.disabled = true;
             try {
-                await fetch('/api/chat/reset', { method: 'POST' });
+                await fetch(`${API_BASE}/api/chat/reset`, { method: 'POST', credentials: 'include' });
             } catch (err) {
                 // Best-effort — even if the server call fails, clearing the visible transcript
                 // below still gives the user a fresh-looking chat; worst case the server still
@@ -232,6 +274,7 @@ document.addEventListener('DOMContentLoaded', () => {
         let html = '';
         let paragraphLines = [];
         let listItems = [];
+        let showMap = false;
 
         function flushParagraph() {
             if (paragraphLines.length) {
@@ -248,6 +291,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
         for (const rawLine of lines) {
             const line = rawLine.trim();
+            if (line === '[SHOW_MAP]') {
+                showMap = true;
+                continue;
+            }
             const bulletMatch = line.match(/^-\s+(.*)/);
             if (!line) {
                 flushParagraph();
@@ -262,6 +309,10 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         flushParagraph();
         flushList();
+        
+        if (showMap) {
+            html += `<div class="map-container" style="margin-top: 12px;"><iframe src="https://campusmap.ufl.edu/#/index/0311" width="100%" height="200" style="border:0; border-radius: 8px;" allowfullscreen="" loading="lazy"></iframe></div>`;
+        }
 
         return html;
     }
@@ -305,10 +356,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 wrap.querySelectorAll('.feedback-btn').forEach((b) => { b.disabled = true; });
                 btn.classList.add('selected');
                 try {
-                    await fetch('/api/chat/feedback', {
+                    await fetch(`${API_BASE}/api/chat/feedback`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ rating, question, answer }),
+                        credentials: 'include'
                     });
                 } catch (err) {
                     // Best-effort — a failed feedback POST shouldn't disrupt the chat.
@@ -331,7 +383,7 @@ document.addEventListener('DOMContentLoaded', () => {
         avatarDiv.classList.add('message-avatar');
         if (type === 'bot') {
             const img = document.createElement('img');
-            img.src = 'gator_avatar.png';
+            img.src = `${API_BASE}/gator_avatar.png`;
             img.alt = 'Gator';
             avatarDiv.appendChild(img);
         } else {
@@ -440,8 +492,12 @@ document.addEventListener('DOMContentLoaded', () => {
     // startStream/writeEvent) instead of one JSON blob — {type:'chunk'|'blocked'|'error'|'done'}.
     // We read the response body incrementally so the bot bubble fills in as text is generated,
     // rather than staying blank until the whole reply is ready.
+    let isStreaming = false;
+
     async function sendMessage(text) {
         if (!text || !text.trim()) return;
+        if (isStreaming) return;
+        isStreaming = true;
 
         const userText = text.trim();
         addUserMessage(userText);
@@ -450,10 +506,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
         showTypingIndicator();
 
-        let botEntry = null; // created lazily on the first real event, so typing dots persist
-        let rendered = '';   // accumulated safe text currently shown
+        let botEntry = null;
+        let rendered = '';
         let finalSources = [];
-        let ended = false;   // blocked or errored — no source badge/feedback on those
+        let ended = false;
+
+        let typewriterQueue = '';
+        let flushInterval = null;
+        let streamDone = false;
 
         function ensureBotEntry() {
             if (!botEntry) {
@@ -468,15 +528,48 @@ document.addEventListener('DOMContentLoaded', () => {
             chatMessages.scrollTop = chatMessages.scrollHeight;
         }
 
+        function finalizeEntry() {
+            const entry = ensureBotEntry();
+            if (!rendered) {
+                rendered = "Sorry, I couldn't process that request.";
+                renderInto(entry, rendered);
+            }
+            if (!ended && !entry.hasFinalized) {
+                entry.hasFinalized = true;
+                const badge = buildSourceBadge(finalSources);
+                if (badge) entry.contentDiv.appendChild(badge);
+                const feedback = buildFeedbackButtons(userText, rendered);
+                if (feedback) entry.contentDiv.appendChild(feedback);
+            }
+            chatSend.disabled = !chatInput.value.trim();
+            chatInput.focus();
+            isStreaming = false;
+        }
+
+        function processQueue() {
+            if (typewriterQueue.length === 0) {
+                if (streamDone) {
+                    clearInterval(flushInterval);
+                    finalizeEntry();
+                }
+                return;
+            }
+            // Dynamic typing speed: if queue is large, pop more chars to catch up
+            const charsToPop = Math.max(1, Math.floor(typewriterQueue.length / 25));
+            rendered += typewriterQueue.slice(0, charsToPop);
+            typewriterQueue = typewriterQueue.slice(charsToPop);
+            renderInto(ensureBotEntry(), rendered);
+        }
+
         try {
-            const response = await fetch('/api/chat', {
+            const response = await fetch(`${API_BASE}/api/chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ message: userText }),
+                credentials: 'include'
             });
 
             if (!response.ok) {
-                // Pre-stream validation/config failures (400/503/500) are still plain JSON.
                 let data = {};
                 try { data = await response.json(); } catch (err) { /* ignore parse failure */ }
                 removeTypingIndicator();
@@ -484,12 +577,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 addBotMessage(renderBotText(replyText));
                 chatSend.disabled = !chatInput.value.trim();
                 chatInput.focus();
+                isStreaming = false;
                 return;
             }
 
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
             let buffer = '';
+            
+            flushInterval = setInterval(processQueue, 40); // type every 40ms
 
             while (true) {
                 const { value, done } = await reader.read();
@@ -503,17 +599,18 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (!line) continue;
 
                     let event;
-                    try { event = JSON.parse(line); } catch (err) { continue; } // skip a malformed line rather than crash
+                    try { event = JSON.parse(line); } catch (err) { continue; }
 
                     if (event.type === 'chunk') {
-                        rendered += event.text;
-                        renderInto(ensureBotEntry(), rendered);
+                        typewriterQueue += event.text;
                     } else if (event.type === 'blocked') {
                         ended = true;
+                        typewriterQueue = '';
                         rendered = event.text || 'That information is restricted. Please contact your supervisor or the Game Room admin directly for it.';
                         renderInto(ensureBotEntry(), rendered);
                     } else if (event.type === 'error') {
                         ended = true;
+                        typewriterQueue = '';
                         rendered = event.message || 'Sorry, I ran into a problem answering that. Please try again in a moment.';
                         renderInto(ensureBotEntry(), rendered);
                     } else if (event.type === 'done') {
@@ -521,28 +618,18 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                 }
             }
-
-            const entry = ensureBotEntry(); // defensive — a stream that closed with no events at all
-            if (!rendered) {
-                rendered = "Sorry, I couldn't process that request.";
-                renderInto(entry, rendered);
-            }
-            if (!ended) {
-                const badge = buildSourceBadge(finalSources);
-                if (badge) entry.contentDiv.appendChild(badge);
-                const feedback = buildFeedbackButtons(userText, rendered);
-                if (feedback) entry.contentDiv.appendChild(feedback);
-            }
+            streamDone = true;
         } catch (error) {
             console.error("Chat Error:", error);
             removeTypingIndicator();
             if (!botEntry) {
                 addBotMessage("Sorry, I'm having trouble connecting to the server. Please try again later.");
             }
+            if (flushInterval) clearInterval(flushInterval);
+            chatSend.disabled = !chatInput.value.trim();
+            chatInput.focus();
+            isStreaming = false;
         }
-
-        chatSend.disabled = !chatInput.value.trim();
-        chatInput.focus();
     }
 
     // Form submit
@@ -713,7 +800,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // see routes/chat.js's recordTurn), so restored bot turns show plain text with no badge.
     async function restoreHistory() {
         try {
-            const res = await fetch('/api/chat/history');
+            const res = await fetch('/api/chat/history', { credentials: 'include' });
             const data = await res.json();
             const history = Array.isArray(data.history) ? data.history : [];
             if (history.length === 0) return;
@@ -739,6 +826,13 @@ document.addEventListener('DOMContentLoaded', () => {
     // currentTier must be known BEFORE restoreHistory renders feedback buttons on restored
     // bot turns, so these run in sequence rather than in parallel.
     refreshRoleBanner().then(restoreHistory);
+    checkFacilityStatus();
 
     console.log('🐊 Gator Game Room Assistant initialized!');
-});
+};
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initGatorBot);
+} else {
+    initGatorBot();
+}

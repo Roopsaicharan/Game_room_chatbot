@@ -22,7 +22,7 @@ function getClient() {
 
 async function chatComplete(messages, options = {}) {
     const response = await getClient().chat.completions.create({
-        model: env.CHAT_MODEL,
+        model: options.model || env.CHAT_MODEL,
         messages,
         temperature: options.temperature ?? 0.2,
     });

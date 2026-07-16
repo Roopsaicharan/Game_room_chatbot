@@ -197,7 +197,7 @@ test('a genuine question mid-flow gets answered via the normal RAG pipeline, the
         // Flow state must be untouched - answering the affiliation question for real now should
         // advance to the NEXT step (org name), not be treated as a second attempt at some
         // already-passed step.
-        const answered = await agent.post('/api/chat').send({ message: '2' });
+        const answered = await agent.post('/api/chat').send({ message: '1' });
         assert.match(fullText(parseNdjsonEvents(answered.text)), /organization or department/i);
     } finally {
         navigator.chatComplete = originalChatComplete;

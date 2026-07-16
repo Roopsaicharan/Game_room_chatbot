@@ -12,6 +12,7 @@ const SESSIONS_DIR = path.join(PRIVATE_DIR, 'sessions');
 const NAVIGATOR_API_KEY = process.env.NAVIGATOR_API_KEY || '';
 const NAVIGATOR_BASE_URL = process.env.NAVIGATOR_BASE_URL || 'https://api.ai.it.ufl.edu/v1';
 const CHAT_MODEL = 'gpt-oss-120b';
+const ROUTER_MODEL = 'llama-3.1-8b-instruct';
 const EMBED_MODEL = 'nomic-embed-text-v1.5';
 
 const CHROMA_URL = process.env.CHROMA_URL || 'http://localhost:8000';
@@ -71,6 +72,7 @@ module.exports = {
     NAVIGATOR_API_KEY,
     NAVIGATOR_BASE_URL,
     CHAT_MODEL,
+    ROUTER_MODEL,
     EMBED_MODEL,
     CHROMA_URL,
     CHROMA_COLLECTION,

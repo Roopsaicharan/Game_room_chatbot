@@ -7,6 +7,9 @@ const qualtricsAdapter = require('./qualtricsAdapter');
 // target; 'qualtrics' is the real UF form, gated by env.RESERVATION_ALLOW_REAL_SUBMIT inside
 // qualtricsAdapter itself (see that file) — never here, so the gate can't be bypassed by a
 // caller that skips this dispatcher.
+// MAINTENANCE NOTE (Issue #15): BOTH adapters must be maintained moving forward. The Google Forms
+// adapter is required for automated test suites and safe local development, preventing spam to the 
+// real UF Qualtrics instance. The Qualtrics adapter is used exclusively in production.
 const ADAPTERS = {
     'google-forms': googleFormsAdapter,
     qualtrics: qualtricsAdapter,

@@ -39,7 +39,7 @@ async function fillOneStep(page, step, value) {
     // Fallback for the un-scraped House Rental branch fields: match by the question's own
     // container/text, mirroring the same locator style used during the earlier read-only
     // scrape (`.QuestionOuter` containing the question label).
-    const container = page.locator('.QuestionOuter', { hasText: step.question }).first();
+    const container = page.locator('.QuestionOuter', { hasText: step.formLabelHint || step.question }).first();
     if (!(await container.count())) return;
     if (step.type === 'single-choice') {
         await container.getByRole('radio', { name: value, exact: true }).click();

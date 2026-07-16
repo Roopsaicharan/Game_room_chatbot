@@ -2,6 +2,7 @@ const express = require('express');
 const session = require('express-session');
 const FileStore = require('session-file-store')(session);
 const path = require('path');
+const cors = require('cors');
 
 const env = require('./config/env');
 const authStore = require('./services/authStore');
@@ -11,8 +12,15 @@ const adminRoutes = require('./routes/admin');
 
 const app = express();
 
-// Frontend and API are served from this same Express app — no cross-origin access is
-// needed, so we deliberately don't enable CORS (smaller attack surface).
+if (process.env.CORS_ORIGIN) {
+    app.use(cors({
+        origin: process.env.CORS_ORIGIN,
+        credentials: true
+    }));
+}
+
+// Frontend and API are served from this same Express app by default.
+// If CORS_ORIGIN is set, we enable cross-origin access for drop-in embedding.
 app.use(express.json({ limit: '20kb' }));
 
 const SESSION_MAX_AGE_MS = 8 * 60 * 60 * 1000; // 8 hours
@@ -32,9 +40,10 @@ app.use(session({
     saveUninitialized: false,
     cookie: {
         httpOnly: true,
-        sameSite: 'lax',
+        sameSite: process.env.CORS_ORIGIN ? 'none' : 'lax',
         // Set SESSION_COOKIE_SECURE=true once this is served over HTTPS in production.
-        secure: process.env.SESSION_COOKIE_SECURE === 'true',
+        // Must be true if sameSite is 'none'.
+        secure: process.env.SESSION_COOKIE_SECURE === 'true' || !!process.env.CORS_ORIGIN,
         maxAge: SESSION_MAX_AGE_MS,
     },
 }));

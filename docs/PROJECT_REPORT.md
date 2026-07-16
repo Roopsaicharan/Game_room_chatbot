@@ -40,8 +40,8 @@ stress suite. See M8/M9 and Section 9/10.
 ## 2. Objectives and scope
 
 ### In scope (delivered)
-- Local-only inference: `gpt-oss-120b` (chat/routing) and `nomic-embed-text-v1.5`
-  (embeddings) via the UF Navigator OpenAI-compatible API.
+- Local-only inference: `gpt-oss-120b` (chat), `llama-3.1-8b-instruct` (routing),
+  and `nomic-embed-text-v1.5` (embeddings) via the UF Navigator OpenAI-compatible API.
 - A code-driven intent router (`manual` / `live` / `casual` / `unsupported`) — not native
   model tool-calling — so every safety check sits in auditable application code.
 - Manual-grounded Q&A via ChromaDB, with precomputed embeddings and role-filtered retrieval.

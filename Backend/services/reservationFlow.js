@@ -237,7 +237,10 @@ const STEPS = [
         question: 'Name of Organization/Department (no acronyms)',
         promptText: 'What organization or department is this for? (spell it out, no acronyms)',
         type: 'text',
-        appliesTo: () => true,
+        appliesTo: (answers) => {
+            const affil = answers.affiliation;
+            return affil !== 'UF Student (not with an organization)' && affil !== 'Non-Affiliated with UF';
+        },
         validate: validateText(),
     },
     {
@@ -275,7 +278,7 @@ const STEPS = [
     },
     {
         id: 'alternateDate',
-        question: "If you're requested date is unavailable, is there an alternate date that you would prefer? Please list below.",
+        question: "If your requested date is unavailable, is there an alternate date that you would prefer? Please list below.",
         // The Google Forms test target was built with a shorter paraphrase of this question -
         // formLabelHint lets the googleFormsAdapter match on that instead of the full literal
         // text, without changing `question` (which must stay the real Qualtrics form's exact
