@@ -7,6 +7,14 @@ const { buildSystemPrompt, CANNED_RESPONSES } = require('../lib/personaPrompt');
 const router_ = require('../services/router');
 const liveInfo = require('../services/liveInfo');
 const { searchManual } = require('../services/searchManual');
+const reactAgent = require('../services/reactAgent');
+
+// ReACT retrieval planner: a bounded Thought→Action→Observation loop that can replace the
+// single-shot context fetch for manual/live questions (see services/reactAgent.js). OPT-IN: the
+// tuned single-shot path is the default because it verified higher on the persona stress harness
+// (124/125 vs ReACT's 121/125 — ReACT's weaker planner regressed multi-turn scoping and some
+// phone/live lookups). Set REACT_MODE=true to enable the agentic loop.
+const REACT_MODE = process.env.REACT_MODE === 'true';
 const outputGuard = require('../services/outputGuard');
 const analyticsStore = require('../services/analyticsStore');
 const reservationFlow = require('../services/reservationFlow');
@@ -418,7 +426,13 @@ async function answerAndStream(req, res, userMessage, { suppressReservationCta =
         return { replyText: CANNED_RESPONSES.OUT_OF_SCOPE, sources: [], blocked: false, streamError: false };
     }
 
-    const { block, citations } = await buildToolContext(effectiveIntent, standaloneQuery, userRole);
+    // For manual/live questions, gather context with the bounded ReACT loop (role-scoped,
+    // read-only tools); casual small talk needs no retrieval and skips it. Everything downstream
+    // (guarded streaming, canned detection, citations) is identical either way.
+    const useReact = REACT_MODE && (effectiveIntent === 'manual' || effectiveIntent === 'live');
+    const { block, citations } = useReact
+        ? await reactAgent.planContext({ message: userMessage, standaloneQuery, history: contextHistory, role: userRole, intent: effectiveIntent })
+        : await buildToolContext(effectiveIntent, standaloneQuery, userRole);
 
     const messages = [
         { role: 'system', content: buildSystemPrompt(userRole, currentDateTime) },
@@ -428,6 +442,15 @@ async function answerAndStream(req, res, userMessage, { suppressReservationCta =
     }
     for (const turn of contextHistory) {
         messages.push({ role: turn.role, content: turn.content });
+    }
+    // Elliptical follow-ups ("is it free?", "how many?") were retrieved against the router's
+    // standalone rewrite, but the model still answered the bare pronoun and lost the antecedent
+    // (the recent turns anchored it on the wrong subject). Placed HERE — immediately before the
+    // user's message, after the history — the resolved question is the most recent instruction the
+    // model sees, so its answer matches the context actually fetched ("is foosball free?", not a
+    // contextless "is it free?"). Only added when it meaningfully differs from the raw message.
+    if (standaloneQuery && standaloneQuery.trim().toLowerCase() !== userMessage.trim().toLowerCase()) {
+        messages.push({ role: 'system', content: `The user's latest message is elliptical. Interpreted in context it means: "${standaloneQuery}". Answer THAT specific question using the retrieved context above.` });
     }
     messages.push({ role: 'user', content: userMessage });
 
@@ -585,6 +608,19 @@ router.post('/', chatLimiter, async (req, res) => {
     }
     if (userMessage.length > MAX_MESSAGE_LENGTH) {
         return res.status(400).json({ error: `message must be ${MAX_MESSAGE_LENGTH} characters or fewer` });
+    }
+
+    // Guarantee a persistent session from the very FIRST message. On the streamed /api/chat path
+    // express-session writes its Set-Cookie via an on-headers hook that fires at startStream()'s
+    // res.writeHead() — which happens BEFORE recordTurn() first mutates the session. With
+    // saveUninitialized:false an as-yet-untouched new session counts as empty, so no cookie is
+    // emitted and an anonymous visitor is handed a fresh, memory-less session on every turn
+    // (breaking the "conversation memory is server-side" contract for public users; logged-in
+    // users were unaffected only because the non-streamed /api/auth/*-login already set the
+    // cookie). Touching the session here — before any startStream() — marks it modified so the
+    // cookie goes out on turn 1 and req.session.history actually persists across turns.
+    if (req.session && !Array.isArray(req.session.history)) {
+        req.session.history = [];
     }
 
     // A reservation flow already in progress, or a fresh "start" trigger, completely bypasses
