@@ -8,6 +8,41 @@ const chromaClient = require('../services/chromaClient');
 const MAX_CHUNK_CHARS = 800;
 const OVERLAP_CHARS = 120; // ~15% overlap so a fact split across a chunk boundary isn't lost
 
+// Contextual retrieval (Anthropic's "Contextual Retrieval"): before embedding, prepend a short,
+// LLM-generated sentence that situates each chunk within its section/manual. A terse, slide-
+// derived chunk ("press and hold the blue X") then embeds and BM25-indexes with the context it
+// needs ("...how to apply a lane tag on the LED wall..."), so ambiguous or follow-up queries
+// retrieve it far more reliably. On by default; set CONTEXTUAL_CHUNKING=false to fall back to raw
+// chunks (used by the version2 rollback path).
+const CONTEXTUAL_CHUNKING = process.env.CONTEXTUAL_CHUNKING !== 'false';
+
+async function contextualizeChunk(sectionTitle, sectionBody, chunkText) {
+    const messages = [
+        {
+            role: 'system',
+            content: 'You write one short retrieval-context sentence for a chunk of a knowledge base. Name the specific topic, equipment, procedure, or policy the chunk covers and the terms someone would search to find it. Rules: one sentence; do NOT begin with "This chunk", "This section", or "This is"; do NOT say it is from a manual; just state the content. Reply with only the sentence.',
+        },
+        {
+            role: 'user',
+            content: `Section title (for reference only, do not just repeat it): "${sectionTitle}"\n\nSurrounding section text:\n<section>\n${sectionBody.slice(0, 4000)}\n</section>\n\nThe chunk to describe:\n<chunk>\n${chunkText}\n</chunk>\n\nOne short content-describing sentence:`,
+        },
+    ];
+    try {
+        // Uses the main chat model for better instruction-following (a weaker model tended to
+        // just echo "This chunk is from the X section", which adds no retrieval signal).
+        const raw = await navigator.chatComplete(messages, { temperature: 0, model: env.CHAT_MODEL });
+        let ctx = String(raw || '').trim().replace(/^["']+|["']+$/g, '').replace(/\s+/g, ' ');
+        // Belt-and-suspenders: strip the low-value boilerplate opener if the model uses it anyway.
+        ctx = ctx.replace(/^(this (chunk|section|text|passage)\b[^.]*\.\s*)/i, '').trim();
+        return ctx.slice(0, 300);
+    } catch (err) {
+        // Best-effort: a contextualization failure must never abort the ingest — fall back to the
+        // raw chunk (still fully retrievable, just without the extra context boost).
+        log(`  (context generation failed for a "${sectionTitle}" chunk: ${err.message} — using raw chunk)`);
+        return '';
+    }
+}
+
 const PUBLIC_KEYWORDS = [
     'hours', 'hour', 'pricing', 'price', 'cost', 'rate', 'location', 'general information',
     'how to play', 'equipment list', 'offerings', 'about us', 'faq', 'rules for guests',
@@ -160,20 +195,32 @@ async function ingestManual({ log = console.log } = {}) {
     const sections = parseSections(sanitizedText);
     log(`Parsed ${sections.length} section(s).`);
 
+    if (CONTEXTUAL_CHUNKING) {
+        log(`Contextual chunking ON — generating per-chunk context via ${env.CHAT_MODEL}.`);
+    }
     const records = [];
     for (const section of sections) {
         const accessLevel = detectAccessLevel(section);
+        const sectionBody = section.bodyLines.join('\n');
         const paragraphs = splitIntoParagraphs(section.bodyLines);
         const chunks = addOverlap(chunkParagraphs(paragraphs));
         const slug = slugify(section.title);
-        chunks.forEach((chunkText, i) => {
+        for (let i = 0; i < chunks.length; i++) {
+            const chunkText = chunks[i];
+            // The stored/embedded/BM25-indexed document is the context sentence + the chunk. The
+            // context is derived only from already-sanitized text, so it introduces no new PII.
+            let storedText = chunkText;
+            if (CONTEXTUAL_CHUNKING) {
+                const context = await contextualizeChunk(section.title, sectionBody, chunkText);
+                if (context) storedText = `${context}\n${chunkText}`;
+            }
             records.push({
                 id: `${slug}-${i}`,
                 section: section.title,
                 accessLevel,
-                text: chunkText,
+                text: storedText,
             });
-        });
+        }
     }
 
     if (records.length === 0) {
