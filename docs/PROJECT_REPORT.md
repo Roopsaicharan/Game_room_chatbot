@@ -35,6 +35,17 @@ runs), with the automated unit suite growing to 127 tests. A later robustness pa
 same-day closure handling, source-combination, router-reliability hardening, and a hostile-input
 stress suite. See M8/M9 and Section 9/10.
 
+A final quality pass (M10) was driven by a **persona stress harness** — five distinct "human"
+personas (a casual freshman, a formal visiting parent, an ESL speaker, a staff member, an
+adversarial probe) asking ~125 human-phrased questions per run across multi-turn sessions, each
+question tagged with the behavior it should get so real defects separate from correct refusals.
+Iterating against it took a multi-turn context-loss bug, off-topic leaks, and holiday-hours
+dead-ends to a stable 125/125, and — most importantly — surfaced a **silent session-memory bug
+the harness's own scoring had been masking**: anonymous visitors never received a session cookie
+on the streamed chat path, so multi-turn memory only actually worked for logged-in users. That
+pass also added contextual-retrieval chunking and an opt-in ReACT retrieval planner. The unit
+suite grew to 165 tests. See M10, defects 15–16, and Section 9/10.
+
 ---
 
 ## 2. Objectives and scope
@@ -111,6 +122,7 @@ Full diagrams (system context, request sequence, ingestion pipeline) are in
 | M7 | Automated regression suite + persistent sessions | `Backend/test/` (`node:test`/`supertest` tests covering sanitizer, output guard, ingestion parsing, tier middleware, auth flow, chat input validation), `scripts/ingest.js` refactored to export its pure functions for testing, `session-file-store` replacing `express-session`'s in-memory default |
 | M8 | Enhancement pass (post-handoff) | Conversation memory (session-backed) + combined classify/rewrite router; hybrid vector+BM25 retrieval (`services/keywordIndex.js`) with RRF fusion, chunk overlap, trimmed citations, live+manual blending; real supervisor tier (`[SUPERVISOR]` content, login) making access four-level; admin content/log APIs (`routes/admin.js`) + `frontend/admin-content.html`; analytics/feedback logging (`services/analyticsStore.js`); `/api/chat` rate-limiting + tiered output guard; disk-durable live cache; 50-question eval harness (`Backend/eval/`, `scripts/eval.js`). Unit suite grew to 91 tests; eval bar reached a stable 50/50 |
 | M9 | Robustness pass (live-bug + stress driven) | Same-day closure/holiday guard (`liveInfo.closureAlertForToday` + prompt rules; fixes a confidently-wrong "we're open" on a closure day); structured sources returned to the client and rendered as a hover badge instead of a long footer; bidirectional live+manual combination (manual answers enriched with current data, incl. the phone number the sanitizer redacts from the manual); router reliability hardening (`resolveIntent` confirm-bad-before-refuse + few-shot examples, so the LLM router no longer hard-refuses legit questions it mislabels); stronger clock anchoring; non-string `message` rejected with 400 (found by the new stress suite). Added `test/edgecases.test.js` (33 hostile/degenerate cases) and `scripts/complex-probe.js`; unit suite now 127 tests, eval stable 50/50 |
+| M10 | Quality pass (persona-stress driven) | Five-persona stress harness (~125 tagged, human-phrased, multi-turn questions/run) used as the break-and-fix loop. Fixes: **anonymous session memory on the streamed chat path** (express-session's cookie was never sent on turn 1 — see defect 15); **multi-turn elliptical context loss** ("is it free?" now resolves to the prior topic in both retrieval and the answer — defect 16); a hard STAY-IN-SCOPE persona rule (off-topic trivia declined even for staff); specific-day/holiday hours give day-of-week hours + a call-to-confirm caveat instead of "no information"; deterministic staff credential-location pointer (#14) and reservation-FAQ/phone fallbacks (#4, #8). Enhancements: **contextual-retrieval chunking** (`CONTEXTUAL_CHUNKING`, per-chunk LLM context sentence before embedding) and an **opt-in bounded ReACT retrieval planner** (`services/reactAgent.js`, `REACT_MODE`, off by default — single-shot scored higher on the harness). Reservation flow hardened (lane auto-calc, org-name auto-skip, verified Qualtrics/Google Forms submission). Stress harness reached a stable 125/125; unit suite grew to 165 tests, eval stable 50/50 |
 
 M3 was pulled ahead of M2 mid-project after user testing surfaced hallucinated live-data
 answers — the fix (real tool grounding) was prioritized over sequencing purity. M6 happened
@@ -167,6 +179,18 @@ numbers, a personal cell number) did not make it into the vector store.
   collection stays intact until the new one is fully built. At the current manual size
   (48 chunks), the cost of re-embedding everything is a few seconds; this tradeoff should be
   revisited if the manual grows to hundreds of pages or is re-ingested on a tight schedule.
+- **Contextual retrieval at ingest, not query time (M10).** Each chunk gets a short
+  LLM-generated context sentence prepended before embedding/BM25 indexing (Anthropic's
+  "Contextual Retrieval"), so terse or slide-derived chunks and elliptical follow-ups retrieve
+  reliably. The cost is one extra Navigator call *per chunk* at ingest — acceptable at the
+  current ~48-chunk scale and paid only when the manual changes, not per request. It's gated by
+  `CONTEXTUAL_CHUNKING` (default on) with a raw-chunk fallback both per-chunk (on generation
+  failure) and globally (the flag), so it can never harden into a single point of ingest failure.
+- **ReACT planner kept opt-in, chosen by measurement, not intuition (M10).** A bounded ReACT
+  retrieval loop was built and A/B'd against the tuned single-shot path on the persona stress
+  harness; single-shot scored higher (the weaker planner regressed multi-turn scoping and some
+  phone/live lookups), so it remains the default and ReACT ships behind `REACT_MODE` for future
+  re-evaluation rather than being discarded.
 - **Cheerio over Playwright for live-data fetching.** Verified early on (plain `curl`) that
   both allowlisted union.ufl.edu pages are fully server-rendered — the hours/pricing/closure
   text is present in the raw HTML with no client-side JavaScript required to produce it. A
@@ -183,8 +207,12 @@ numbers, a personal cell number) did not make it into the vector store.
 Testing was performed in two passes: an API-level pass (curl-driven, covering error handling,
 auth flows, and all four router intents) and a browser-driven pass using a `playwright-core`
 script against the actual running app (headless Chrome, real clicks/typing, screenshots),
-since the environment's preferred browser-automation tool wasn't available. Every defect
-below was found by actually exercising the running app, not by code inspection alone.
+since the environment's preferred browser-automation tool wasn't available. A later pass (M10)
+added a **five-persona stress harness** — scripted, human-phrased, multi-turn conversations with
+per-question expected-behavior tags, run repeatedly against the live server — which drove
+defects 15–16 and confirmed a stable 125/125. Every defect below was found by actually exercising
+the running app, not by code inspection alone; defect 15 is a cautionary case where the harness's
+own coarse scoring initially *hid* the bug until a targeted cookie/multi-turn check exposed it.
 
 | # | Defect | How it was found | Fix |
 |---|---|---|---|
@@ -202,6 +230,8 @@ below was found by actually exercising the running app, not by code inspection a
 | 12 | **Account/merchant/terminal numbers (10-12 digits) weren't redacted** — too short for the credit-card pattern (13-16 digits), too long/oddly-punctuated for the phone pattern | Direct testing: `Account: # 120615366781` survived sanitization | Added a labeled account-number pattern; had to fix its separator matching twice (single-char `[:#]` didn't handle `": #"`, then bounded the whitespace span to avoid a runaway match) |
 | 13 | **Heading-detection fragmented a real procedure**: a numbered step ("3. Message team members individually.") inside SHIFT COVERAGE PROCEDURE was detected as its own section heading and **auto-tagged `public`** | Inspecting the ingested collection's section list — found 33 sections instead of the intended 31 | Removed numbered-line heading detection entirely (Markdown/ALL-CAPS only); re-ingested; verified exactly 31 sections with correct tagging |
 | 14 | **"Is it open right now" answers were inconsistent** — the model only had the current *date* in context, not the time, so it sometimes hedged even with correct hours available | Repeated manual testing of the same query | Pass full date+time (`dateStyle: 'full', timeStyle: 'short'`) instead of date-only; caught and fixed an `Intl.DateTimeFormat` option-conflict crash (`weekday` can't be combined with `dateStyle`) during this same change, before it shipped |
+| 15 | **Anonymous visitors got no session cookie on the streamed chat path** — every message from a not-logged-in user started a fresh, memory-less session, so multi-turn memory silently only worked for logged-in users | Persona stress harness + a direct cookie/multi-turn check ("do you have foosball?" → "is it free?" returned a generic "it depends" instead of a foosball answer). The harness had *masked* it: its pass/fail classifier scores any substantive reply as PASS, so the amnesiac answer still "passed" | Root cause: express-session emits `Set-Cookie` via an `on-headers` hook that fires at `startStream()`'s `res.writeHead()` — before `recordTurn()` first mutates the session — and with `saveUninitialized:false` an untouched new session is treated as empty, so no cookie is sent (logged-in users were spared because the non-streamed `/api/auth/*-login` already set it). Fix: touch `req.session` (init `history`) at the top of `POST /api/chat`, before any `startStream()`, so the cookie ships on turn 1. Verified the foosball follow-up now answers "Yes, foosball is free" |
+| 16 | **Multi-turn elliptical follow-ups lost context** — after "do you have foosball?", "is it free?" was answered as a bare pronoun (or classified as casual), losing the antecedent | Persona stress harness (issue #6), consistently on the "is it free?" turn | Two-part fix: (a) the router now classifies short elliptical follow-ups as *factual* and rewrites them into a standalone query by the resolved topic ("is foosball free"), steering retrieval; (b) `routes/chat.js` injects a one-line system hint with that resolved query immediately before the user's message, so the model answers the intended question rather than the raw pronoun. Both are needed — the rewrite fixes what's fetched, the hint fixes what's answered |
 
 **Post-restructure regression**: after splitting into `frontend/`/`Backend/`, the full
 browser-driven test suite (5-question conversation, staff login + role banner, staff-only
@@ -253,12 +283,15 @@ Full detail in [`SECURITY.md`](../SECURITY.md). Highlights relevant to a handoff
   defect 13) — a manual using a different heading style will need explicit `[PUBLIC]`/
   `[STAFF]`/`[SUPERVISOR]` markers added by hand, or it will fall into one large `General`
   section.
-- The automated regression suite (`Backend/test/`, now 127 tests, incl. a hostile-input
+- The automated regression suite (`Backend/test/`, now 165 tests, incl. a hostile-input
   `edgecases.test.js`) covers deterministic
   application logic. The LLM-answer-quality evaluation set now also exists (M8,
-  `Backend/eval/`, `npm run eval`, 50 graded questions) and currently passes 50/50 — but it
-  runs against a live server with real, non-deterministic model calls, so treat it as a
-  regression signal, not a proof of perfection.
+  `Backend/eval/`, `npm run eval`, 50 graded questions) and currently passes 50/50; the M10
+  persona stress harness adds a second live-server signal (~125 tagged multi-turn questions,
+  stable 125/125) — but both run against real, non-deterministic model calls, so treat them as
+  regression signals, not a proof of perfection. Note the harness's coarse pass/fail scoring can
+  mask a bug that still produces a plausible-looking answer (see defect 15), so pair it with
+  targeted checks for anything session- or memory-related.
 - `staff`, `supervisor`, and `admin` seed to the default `0000` password for handoff
   convenience — must be rotated via the admin panel before any real use. The server now logs a
   loud startup warning while any role is still on the default.

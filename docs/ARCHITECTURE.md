@@ -133,10 +133,11 @@ sequenceDiagram
 
     U->>S: POST /api/chat { message }
     S->>C: role = session.tier (or "public"); load session history
+    C->>C: touch req.session (init history) BEFORE streaming — so Set-Cookie ships on turn 1
     C->>R: classifyAndRewrite(message, recentHistory)
     R->>N: 1 chat completion (temp 0) → JSON
     N-->>R: { intent, standalone_query }
-    R-->>C: intent + standalone query (pronouns/ellipsis resolved)
+    R-->>C: intent + standalone query (pronouns/ellipsis resolved; elliptical follow-ups → factual)
     C->>C: resolveIntent — confirm 'unsupported' in code (SECRET/OFFTOPIC) before refusing
 
     alt intent == live
@@ -156,7 +157,8 @@ sequenceDiagram
         Note over C: unsupported short-circuits to a canned refusal (no generation)
     end
 
-    C->>N: chat completion (persona prompt + context block + recent history + message)
+    Note over C: if the message was elliptical, inject a 1-line system hint with the resolved<br/>query ("interpreted in context: 'is foosball free'") right before the user message
+    C->>N: chat completion (persona prompt + context block + recent history + [hint] + message)
     N-->>C: draft reply
     C->>G: guard(draft reply)
     G->>G: tiered scan — 'block' shapes replace whole reply; 'redact' shapes masked inline
@@ -180,7 +182,8 @@ flowchart LR
     B --> C["parseSections()<br/>Markdown/ALL-CAPS headings only +<br/>[PUBLIC]/[STAFF]/[SUPERVISOR] markers"]
     C --> D["chunkParagraphs() → addOverlap()<br/>~800 char chunks + ~15% inter-chunk<br/>overlap (within a section)"]
     D --> E["detectAccessLevel()<br/>explicit marker → keyword heuristic<br/>→ default: staff (restrictive)"]
-    E --> F["navigatorClient.embed()<br/>one Navigator call per chunk"]
+    E --> CTX["contextualizeChunk() (CONTEXTUAL_CHUNKING, default on)<br/>prepend 1 LLM-generated context sentence<br/>from already-sanitized text; raw-chunk fallback on failure"]
+    CTX --> F["navigatorClient.embed()<br/>one Navigator call per chunk"]
     F --> G["chromaClient.resetCollection()<br/>full delete + rebuild every run,<br/>no embedding function, no incremental cache"]
     G --> H[("ChromaDB<br/>game_room_manual collection<br/>id · document · embedding · metadata")]
 ```
@@ -269,4 +272,21 @@ Robustness pass (M9):
   compact ⓘ badge. Live+manual are combined bidirectionally so answers are more precise (and
   contact facts the sanitizer redacts from the manual are pulled from the live page).
 - **Hardened input validation + stress suite** — non-string message bodies rejected; a
-  33-case `test/edgecases.test.js` exercises hostile/degenerate inputs. Unit suite: 127 tests.
+  33-case `test/edgecases.test.js` exercises hostile/degenerate inputs.
+
+Quality pass (M10):
+- **Anonymous session memory on the streamed path** — `POST /api/chat` touches `req.session`
+  before the first `startStream()` so express-session's `Set-Cookie` reaches the browser on turn
+  1; without it, streamed-response headers flush before the session is written and every
+  not-logged-in visitor got a fresh, memory-less session per message (persona-harness defect 15).
+- **Elliptical follow-up resolution** — bare follow-ups ("is it free?") are routed as factual and
+  rewritten to a standalone query for retrieval, and a one-line resolved-query hint is injected
+  before the model answers, so it responds to the intended antecedent, not the pronoun (issue #6).
+- **Contextual-retrieval chunking** — `scripts/ingest.js` prepends an LLM-generated context
+  sentence to each chunk before embedding (`CONTEXTUAL_CHUNKING`, default on), improving recall
+  for terse/follow-up queries; derived only from sanitized text, with a raw-chunk fallback.
+- **Opt-in ReACT retrieval planner** — `services/reactAgent.js` (`REACT_MODE`, default off): a
+  bounded, role-scoped, read-only Thought→Action→Observation loop; single-shot remains default
+  because it scored higher on the persona stress harness.
+- **Persona stress harness** — five human personas × ~125 tagged multi-turn questions per run,
+  used as the break-and-fix loop; stable 125/125. Unit suite: 165 tests.

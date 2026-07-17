@@ -107,6 +107,8 @@ cp .env.example .env
 | `PORT` | No | `3000` | |
 | `RELEVANCE_THRESHOLD` | No | `0.35` | Minimum cosine similarity for a manual passage to be used. Tune once you have real manual content — a small/homogeneous manual will naturally produce a narrower score spread than a large varied one. |
 | `LIVE_CACHE_TTL_MINUTES` | No | `30` | How long fetched union.ufl.edu content is cached. |
+| `CONTEXTUAL_CHUNKING` | No | `true` | When on, `npm run ingest` prepends a short LLM-generated context sentence to each chunk before embedding (Anthropic "Contextual Retrieval"), improving retrieval for terse/follow-up queries. Set `false` to store raw chunks. Changing it requires a re-ingest. |
+| `REACT_MODE` | No | `false` | Opt-in bounded ReACT retrieval planner (`services/reactAgent.js`) for `manual`/`live` turns. Off by default — the single-shot path verified higher on the persona stress harness. |
 
 ### 3. Start ChromaDB (separate server)
 
@@ -151,6 +153,14 @@ tags each chunk `public`/`staff`, embeds every chunk via Navigator, and rebuilds
 collection from scratch (safe to re-run any time the manual changes — it does a full
 delete-and-recreate, not an incremental update, so there's no risk of stale leftover chunks
 from a previous version).
+
+By default (`CONTEXTUAL_CHUNKING=true`) each chunk is **contextualized** before embedding: a
+short LLM-generated sentence naming the chunk's topic/equipment/procedure is prepended to it, so
+terse or slide-derived chunks and elliptical follow-up queries retrieve far more reliably
+(Anthropic's "Contextual Retrieval"). The added sentence is derived only from already-sanitized
+text — it introduces no new PII — and a generation failure falls back to the raw chunk rather than
+aborting the run. Set `CONTEXTUAL_CHUNKING=false` for raw chunks; either way it's an ingest-time
+choice, so flipping it needs a re-ingest.
 
 **Section headings** are detected as either Markdown (`# Heading`) or `ALL CAPS` lines.
 Numbered lines (`1. Do the thing`) are deliberately **not** treated as headings — a real
@@ -218,12 +228,24 @@ follow-ups into a standalone query using recent conversation history) into:
   from an allowlist of exactly two pages (`union.ufl.edu/gameroom/`,
   `union.ufl.edu/gatoresportscenter/`), cached 15–60 min, returned with source URL + "last
   checked" timestamp.
-- **`casual`** — greetings/small talk → answered directly, no retrieval.
+- **`casual`** — greetings/small talk → answered directly, no retrieval. A short **elliptical
+  follow-up** ("is it free?", "how many?", "what about billiards?") is *not* casual — it's
+  resolved against recent turns and classified by the underlying topic (after talking about
+  foosball, "is it free?" → `manual` "is foosball free"). `routes/chat.js` also injects a
+  one-line hint with that resolved question right before the model answers, so it responds to the
+  intended question rather than a bare pronoun (this is the fix for the multi-turn context-loss
+  in issue #6).
 - **`unsupported`** — credential requests, "dump everything", instruction-override attempts,
-  off-topic → refused via a canned response, no tool calls.
+  off-topic → refused via a canned response, no tool calls. Off-topic trivia (capital cities,
+  math, on-demand jokes) is declined even for a logged-in staff/supervisor/admin user — elevated
+  access is for internal Game Room info, not general knowledge.
 
 Both pages were confirmed **server-rendered** during development (a plain `fetch` sees the
 same hours/pricing/closures text a browser would) — no headless browser is used.
+
+For `manual`/`live` turns, context is gathered by a tuned single-shot fetch by default; an
+opt-in bounded ReACT planner (`services/reactAgent.js`, `REACT_MODE=true`) can replace it, but
+single-shot verified higher on the persona stress harness and remains the default.
 
 ---
 
@@ -255,7 +277,7 @@ same hours/pricing/closures text a browser would) — no headless browser is use
 - `npm start` — run the app (`PORT` from `.env`, default 3000).
 - `npm run ingest` — rebuild the manual's vector store after editing
   `Backend/private/manual_clean.txt` (or use the admin UI's re-ingest).
-- `npm test` — run the offline suite (`node --test --test-concurrency=1 test/`, ~127 tests, incl. a hostile-input `edgecases.test.js`):
+- `npm test` — run the offline suite (`node --test --test-concurrency=1 test/`, 165 tests, incl. a hostile-input `edgecases.test.js`):
   unit tests for the sanitizer, tiered output guard, hybrid manual search/retrieval, the BM25
   keyword index, live-info extraction, the router's classify+rewrite parsing, manual-ingestion
   parsing/overlap, and tier middleware, plus `supertest`-driven integration tests for auth,
@@ -270,7 +292,11 @@ same hours/pricing/closures text a browser would) — no headless browser is use
   rather than `express-session`'s in-memory default, so they survive an app restart on a
   single instance. This does not make sessions shared across multiple concurrent instances —
   that would need a real shared store (e.g. `connect-redis`) if this ever moves to a
-  multi-instance deployment.
+  multi-instance deployment. Note: the streamed `/api/chat` reply flushes its response headers
+  before the session is first written, so `POST /api/chat` deliberately touches `req.session`
+  at the top of the handler — otherwise express-session never sends the `Set-Cookie` on turn 1
+  and an anonymous visitor gets a new, memory-less session per message (fixed; see the defect
+  log in `docs/PROJECT_REPORT.md`).
 - No CORS is enabled — frontend and API are served from the same Express app
   (`Backend/server.js` serves `../frontend` as static files), so none is needed, and it keeps
   the attack surface smaller now that session cookies are in play.
