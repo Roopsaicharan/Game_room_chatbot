@@ -536,7 +536,10 @@ ul {
 
 .message-content p {
     margin: 0 0 8px 0;
-    text-align: justify;
+    text-align: left; /* left, not justify: justify stretched inter-word spaces to both edges,
+                         producing uneven "rivers" of whitespace — and since it doesn't stretch
+                         non-breaking spaces/hyphens (e.g. in phone numbers) the gaps came out
+                         inconsistent within a line. Left keeps every space at natural width. */
 }
 
 .message-content p:last-child {
