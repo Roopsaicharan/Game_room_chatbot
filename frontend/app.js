@@ -311,7 +311,11 @@ const initGatorBot = () => {
         flushList();
         
         if (showMap) {
-            html += `<div class="map-container" style="margin-top: 12px;"><iframe src="https://campusmap.ufl.edu/#/index/0311" width="100%" height="200" style="border:0; border-radius: 8px;" allowfullscreen="" loading="lazy"></iframe></div>`;
+            html += `<div class="map-container" style="margin-top: 12px; background: #eef0f4; padding: 12px; border-radius: 8px; text-align: center; border: 1px solid #e2e5ea;">
+                <div style="font-weight: 600; margin-bottom: 4px;">🗺️ Reitz Union Game Room</div>
+                <div style="font-size: 0.85rem; color: #5b6472; margin-bottom: 10px;">Ground floor (Room G100)</div>
+                <a href="https://campusmap.ufl.edu/#/index/0311" target="_blank" rel="noopener noreferrer" style="display: inline-block; padding: 6px 12px; background: #0021A5; color: white; text-decoration: none; border-radius: 6px; font-size: 0.85rem; font-weight: 500;">Open in UF Campus Map ↗</a>
+            </div>`;
         }
 
         return html;
@@ -340,8 +344,6 @@ const initGatorBot = () => {
     // to the already-built POST /api/chat/feedback endpoint. One-shot: both buttons disable
     // after a click rather than allowing the rating to be changed, keeping the log simple.
     function buildFeedbackButtons(question, answer) {
-        if (currentTier === 'public') return null;
-
         const wrap = document.createElement('span');
         wrap.className = 'feedback-buttons';
 
